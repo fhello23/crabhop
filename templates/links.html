@@ -45,21 +45,39 @@
 
 <section class="card">
   <h2>Existing links</h2>
-  <form method="get" action="/admin" class="search-row">
-    <input type="search" name="q" value="{{ query }}" placeholder="Search slug, URL, label">
-    <button type="submit">Search</button>
+  <form method="get" action="/admin" class="filter-row">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search slug, URL, label" aria-label="Search links">
+    <select name="status" aria-label="Filter by status">
+      <option value="all" {% if status == "all" %}selected{% endif %}>All</option>
+      <option value="active" {% if status == "active" %}selected{% endif %}>Active</option>
+      <option value="expired" {% if status == "expired" %}selected{% endif %}>Expired</option>
+      <option value="disabled" {% if status == "disabled" %}selected{% endif %}>Disabled</option>
+    </select>
+    <select name="sort" aria-label="Sort links">
+      <option value="newest" {% if sort == "newest" %}selected{% endif %}>Newest</option>
+      <option value="oldest" {% if sort == "oldest" %}selected{% endif %}>Oldest</option>
+      <option value="updated" {% if sort == "updated" %}selected{% endif %}>Recently updated</option>
+      <option value="slug" {% if sort == "slug" %}selected{% endif %}>Slug A–Z</option>
+      <option value="clicked" {% if sort == "clicked" %}selected{% endif %}>Most clicked</option>
+    </select>
+    <select name="per_page" aria-label="Links per page">
+      <option value="20" {% if per_page == 20 %}selected{% endif %}>20</option>
+      <option value="50" {% if per_page == 50 %}selected{% endif %}>50</option>
+      <option value="100" {% if per_page == 100 %}selected{% endif %}>100</option>
+    </select>
+    <button type="submit">Apply</button>
     {% if query != "" %}
     <a class="button secondary" href="/admin">Clear</a>
     {% endif %}
   </form>
 
   {% if links.is_empty() %}
-  <p class="muted">No links yet.</p>
+  <p class="muted">No links match these filters.</p>
   {% else %}
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Slug</th><th>Destination</th><th>Status</th><th>Updated</th><th></th></tr>
+      <tr><th>Slug</th><th>Destination</th><th>Clicks</th><th>Status</th><th>Updated</th><th>Actions</th></tr>
     </thead>
     <tbody>
     {% for l in links %}
@@ -68,6 +86,7 @@
           {% if let Some(lbl) = l.label %}<div class="muted"><small>{{ lbl }}</small></div>{% endif %}
         </td>
         <td class="truncate" title="{{ l.target_url }}">{{ l.target_url }}</td>
+        <td class="num">{{ l.total_clicks }}</td>
         <td>
           {% if l.disabled %}<span class="pill off">disabled</span>
           {% else if l.expired %}<span class="pill expired">expired</span>
@@ -75,13 +94,43 @@
           {% if let Some(e) = l.expires_at %}<div class="muted"><small>exp {{ e }}</small></div>{% endif %}
         </td>
         <td><small>{{ l.updated_at }}</small></td>
-        <td><a class="button secondary" href="/admin/links/{{ l.slug }}">Edit</a></td>
+        <td>
+          <div class="actions">
+            <button type="button" class="secondary small" data-copy-value="{{ l.short_url }}">Copy</button>
+            <a class="button secondary small" href="/admin/links/{{ l.slug }}">Edit</a>
+            {% if l.disabled %}
+            <form method="post" action="/admin/links/{{ l.slug }}/enable" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="return_to" value="{{ list_url }}">
+              <button type="submit" class="secondary small">Enable</button>
+            </form>
+            {% else %}
+            <form method="post" action="/admin/links/{{ l.slug }}/disable" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="return_to" value="{{ list_url }}">
+              <button type="submit" class="secondary small danger">Disable</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
-  <p class="muted"><small>Page {{ page }} of {{ total_pages }} — {{ total }} total.</small></p>
+  <div class="pagination">
+    {% if let Some(prev) = prev_url %}
+    <a class="button secondary" href="{{ prev }}">&larr; Previous</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+    <span class="muted"><small>items {{ range_start }}–{{ range_end }} of {{ total }} · Page {{ page }} of {{ total_pages }}</small></span>
+    {% if let Some(next) = next_url %}
+    <a class="button secondary" href="{{ next }}">Next &rarr;</a>
+    {% else %}
+    <span></span>
+    {% endif %}
+  </div>
   {% endif %}
 </section>
 {% endblock %}

@@ -13,7 +13,9 @@ input[type="url"], input[type="text"], input[type="search"], input[type="datetim
 @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
 button, .button { display: inline-block; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; text-decoration: none; font-size: 14px; }
 .button.secondary { background: #fff; color: var(--fg); border-color: var(--line); }
-button.danger { background: var(--err); border-color: var(--err); }
+button.secondary { background: #fff; color: var(--fg); border-color: var(--line); }
+button.small, .button.small { padding: 4px 10px; font-size: 13px; }
+button.danger { background: var(--err); border-color: var(--err); color: #fff; }
 .banner { border-radius: 8px; padding: 12px 16px; margin: 16px 0; }
 .banner.success { background: #def7ec; border: 1px solid #84e1b6; }
 .banner.error { background: #fde8e8; border: 1px solid #f8b4b4; }
@@ -26,5 +28,11 @@ th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); v
 .pill.off { background: #fde8e8; color: var(--err); }
 .pill.expired { background: #fef3c7; color: var(--warn); }
 .search-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.filter-row select { padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+form.inline { display: inline; margin: 0; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .short-url-row { display: flex; gap: 8px; margin-top: 8px; }
 .footer { margin: 32px auto; }

@@ -1,14 +1,12 @@
-use std::collections::HashMap;
-
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::db::links::{
-    create_link, get_link, list_links, normalize_pagination, set_disabled, update_link, Link,
-    ListParams,
+    create_link, get_link, list_links, normalize_pagination, set_disabled, update_link,
+    LinkListItem, LinkSort, ListParams, StatusFilter,
 };
 use crate::domain::link::CreateLinkInput;
 use crate::domain::link::UpdateLinkInput;
@@ -34,11 +32,18 @@ struct LinksTemplate {
     created_short_url: Option<String>,
     error: Option<String>,
     query: String,
+    status: String,
+    sort: String,
     links: Vec<LinkRow>,
     page: u32,
     per_page: u32,
     total: i64,
     total_pages: u32,
+    range_start: i64,
+    range_end: i64,
+    prev_url: Option<String>,
+    next_url: Option<String>,
+    list_url: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +53,7 @@ struct LinkRow {
     short_url: String,
     target_url: String,
     label: Option<String>,
+    total_clicks: i64,
     created_at: String,
     updated_at: String,
     expires_at: Option<String>,
@@ -77,6 +83,24 @@ struct EditTemplate {
 // Query / form types
 // ---------------------------------------------------------------------------
 
+/// Typed admin list parameters. Unknown status/sort values fall back to the
+/// defaults (the JSON API rejects them instead — see `api.rs`).
+#[derive(Debug, Deserialize, Default)]
+pub struct AdminListQuery {
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    sort: Option<String>,
+    #[serde(default)]
+    page: Option<i64>,
+    #[serde(default)]
+    per_page: Option<i64>,
+    #[serde(default)]
+    created: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateForm {
     pub target_url: Option<String>,
@@ -97,6 +121,10 @@ pub struct UpdateForm {
 #[derive(Debug, Deserialize)]
 pub struct EmptyForm {
     pub csrf_token: Option<String>,
+    /// Where to return after an inline enable/disable. Only same-origin
+    /// `/admin` URLs are honored; anything else falls back to the detail page.
+    #[serde(default)]
+    pub return_to: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -176,17 +204,70 @@ fn brand_host(state: &AppState) -> String {
         .to_string()
 }
 
-fn to_row(state: &AppState, link: Link, now: i64) -> LinkRow {
+fn to_row(state: &AppState, item: LinkListItem, now: i64) -> LinkRow {
     LinkRow {
-        short_url: state.short_url(&link.slug),
-        slug: link.slug.clone(),
-        target_url: link.target_url.clone(),
-        label: link.label.clone(),
-        created_at: millis_to_rfc3339(link.created_at),
-        updated_at: millis_to_rfc3339(link.updated_at),
-        expires_at: link.expires_at.map(millis_to_rfc3339),
-        disabled: link.is_disabled(),
-        expired: link.is_expired(now),
+        short_url: state.short_url(&item.link.slug),
+        slug: item.link.slug.clone(),
+        target_url: item.link.target_url.clone(),
+        label: item.link.label.clone(),
+        total_clicks: item.total_clicks,
+        created_at: millis_to_rfc3339(item.link.created_at),
+        updated_at: millis_to_rfc3339(item.link.updated_at),
+        expires_at: item.link.expires_at.map(millis_to_rfc3339),
+        disabled: item.link.is_disabled(),
+        expired: item.link.is_expired(now),
+    }
+}
+
+/// Navigation parameters for the list view. The transient `created` banner
+/// parameter is deliberately excluded so pagination never replays it.
+#[derive(Serialize)]
+struct ListNav<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    q: Option<&'a str>,
+    status: &'a str,
+    sort: &'a str,
+    per_page: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<u32>,
+}
+
+/// List URL preserving search/filter/sort/page-size. The filter form itself
+/// carries no `page`, so changing filters always returns to page 1.
+fn list_url(
+    q: &str,
+    status: StatusFilter,
+    sort: LinkSort,
+    per_page: u32,
+    page: Option<u32>,
+) -> String {
+    let nav = ListNav {
+        q: if q.trim().is_empty() { None } else { Some(q) },
+        status: status.as_param(),
+        sort: sort.as_param(),
+        per_page,
+        page,
+    };
+    match serde_urlencoded::to_string(&nav) {
+        Ok(s) if !s.is_empty() => format!("/admin?{s}"),
+        _ => "/admin".to_string(),
+    }
+}
+
+/// Accept only same-origin `/admin` return targets for inline toggles.
+/// Anything else (absolute URLs, protocol-relative, controls) falls back to
+/// the link detail page, so `return_to` can never become an open redirect.
+fn safe_return_to(raw: Option<&str>, slug: &str) -> String {
+    match raw {
+        Some(r) => {
+            let r = r.trim();
+            let local_admin = r == "/admin" || r.starts_with("/admin/") || r.starts_with("/admin?");
+            if local_admin && r.len() <= 512 && !r.chars().any(|c| c.is_control()) {
+                return r.to_string();
+            }
+            format!("/admin/links/{slug}")
+        }
+        None => format!("/admin/links/{slug}"),
     }
 }
 
@@ -244,17 +325,15 @@ fn format_datetime_local(millis: Option<i64>) -> String {
 pub async fn admin_list_with_created(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<HashMap<String, String>>,
+    Query(params): Query<AdminListQuery>,
 ) -> Response {
     let (csrf_token, set_cookie) = ensure_csrf_token(&headers, &state);
-    let q = params.get("q").cloned().unwrap_or_default();
-    let created_slug = params.get("created").cloned();
-    let page: i64 = params.get("page").and_then(|v| v.parse().ok()).unwrap_or(1);
-    let per_page: i64 = params
-        .get("per_page")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(20);
-    let (page, per_page) = normalize_pagination(Some(page), Some(per_page));
+    let q = params.q.clone().unwrap_or_default();
+    let created_slug = params.created.clone();
+    let status = StatusFilter::from_param(params.status.as_deref()).unwrap_or_default();
+    let sort = LinkSort::from_param(params.sort.as_deref()).unwrap_or_default();
+    let (page, per_page) = normalize_pagination(params.page, params.per_page);
+    let now = now_millis();
 
     match list_links(
         &state.db,
@@ -264,20 +343,29 @@ pub async fn admin_list_with_created(
             } else {
                 Some(q.clone())
             },
+            status,
+            sort,
             page,
             per_page,
+            now,
         },
     )
     .await
     {
         Ok(result) => {
-            let now = now_millis();
             let rows: Vec<LinkRow> = result
                 .items
                 .into_iter()
-                .map(|l| to_row(&state, l, now))
+                .map(|item| to_row(&state, item, now))
                 .collect();
+            let shown = rows.len() as i64;
             let total_pages = ((result.total as f64) / (per_page as f64)).ceil() as u32;
+            let (range_start, range_end) = if result.total == 0 {
+                (0, 0)
+            } else {
+                let start = ((result.page - 1) * result.per_page) as i64 + 1;
+                (start, (start + shown - 1).min(result.total))
+            };
             let tpl = LinksTemplate {
                 title: "Admin — Links".to_string(),
                 brand_host: brand_host(&state),
@@ -285,12 +373,21 @@ pub async fn admin_list_with_created(
                 created_short_url: created_slug.as_ref().map(|s| state.short_url(s)),
                 created_slug,
                 error: None,
-                query: q,
+                query: q.clone(),
+                status: status.as_param().to_string(),
+                sort: sort.as_param().to_string(),
                 links: rows,
                 page: result.page,
                 per_page: result.per_page,
                 total: result.total,
                 total_pages: total_pages.max(1),
+                range_start,
+                range_end,
+                prev_url: (result.page > 1)
+                    .then(|| list_url(&q, status, sort, per_page, Some(result.page - 1))),
+                next_url: (result.page < total_pages.max(1))
+                    .then(|| list_url(&q, status, sort, per_page, Some(result.page + 1))),
+                list_url: list_url(&q, status, sort, per_page, Some(result.page)),
             };
             render_with_cookie(tpl, set_cookie)
         }
@@ -325,7 +422,12 @@ async fn render_list_with_error(
     message: String,
     status: StatusCode,
 ) -> Response {
+    // Error pages fall back to the default view; the transient message is
+    // what matters, not the previous filter state.
+    let status_filter = StatusFilter::All;
+    let sort = LinkSort::Newest;
     let (page, per_page) = normalize_pagination(None, None);
+    let now = now_millis();
     let rows = list_links(
         &state.db,
         ListParams {
@@ -334,16 +436,18 @@ async fn render_list_with_error(
             } else {
                 Some(query.clone())
             },
+            status: status_filter,
+            sort,
             page,
             per_page,
+            now,
         },
     )
     .await
     .map(|r| {
-        let now = now_millis();
         r.items
             .into_iter()
-            .map(|l| to_row(state, l, now))
+            .map(|item| to_row(state, item, now))
             .collect::<Vec<_>>()
     })
     .unwrap_or_default();
@@ -355,11 +459,18 @@ async fn render_list_with_error(
         created_short_url: None,
         error: Some(message),
         query,
+        status: status_filter.as_param().to_string(),
+        sort: sort.as_param().to_string(),
         links: rows,
         page,
         per_page,
         total: 0,
         total_pages: 1,
+        range_start: 0,
+        range_end: 0,
+        prev_url: None,
+        next_url: None,
+        list_url: list_url("", status_filter, sort, per_page, Some(page)),
     };
     match tpl.render() {
         Ok(html) => {
@@ -612,7 +723,10 @@ pub async fn admin_disable(
         Ok(link) => {
             let mut resp = (
                 StatusCode::SEE_OTHER,
-                [(header::LOCATION, format!("/admin/links/{}", link.slug))],
+                [(
+                    header::LOCATION,
+                    safe_return_to(form.return_to.as_deref(), &link.slug),
+                )],
                 "",
             )
                 .into_response();
@@ -641,7 +755,10 @@ pub async fn admin_enable(
         Ok(link) => {
             let mut resp = (
                 StatusCode::SEE_OTHER,
-                [(header::LOCATION, format!("/admin/links/{}", link.slug))],
+                [(
+                    header::LOCATION,
+                    safe_return_to(form.return_to.as_deref(), &link.slug),
+                )],
                 "",
             )
                 .into_response();

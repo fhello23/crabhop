@@ -120,19 +120,133 @@ async fn insert_link(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StatusFilter {
+    #[default]
+    All,
+    Active,
+    Expired,
+    Disabled,
+}
+
+impl StatusFilter {
+    /// Parse a query value. Missing/empty means All; anything else must be a
+    /// known filter so API callers get feedback (the HTML UI falls back).
+    pub fn from_param(raw: Option<&str>) -> Result<Self, AppError> {
+        match raw.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "" | "all" => Ok(Self::All),
+            "active" => Ok(Self::Active),
+            "expired" => Ok(Self::Expired),
+            "disabled" => Ok(Self::Disabled),
+            other => Err(AppError::Validation(format!(
+                "invalid status filter {other:?}: expected all|active|expired|disabled"
+            ))),
+        }
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Active => "active",
+            Self::Expired => "expired",
+            Self::Disabled => "disabled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkSort {
+    #[default]
+    Newest,
+    Oldest,
+    RecentlyUpdated,
+    SlugAsc,
+    MostClicked,
+}
+
+impl LinkSort {
+    pub fn from_param(raw: Option<&str>) -> Result<Self, AppError> {
+        match raw.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "" | "newest" => Ok(Self::Newest),
+            "oldest" => Ok(Self::Oldest),
+            "updated" => Ok(Self::RecentlyUpdated),
+            "slug" => Ok(Self::SlugAsc),
+            "clicked" => Ok(Self::MostClicked),
+            other => Err(AppError::Validation(format!(
+                "invalid sort {other:?}: expected newest|oldest|updated|slug|clicked"
+            ))),
+        }
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::Newest => "newest",
+            Self::Oldest => "oldest",
+            Self::RecentlyUpdated => "updated",
+            Self::SlugAsc => "slug",
+            Self::MostClicked => "clicked",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ListParams {
     pub query: Option<String>,
+    pub status: StatusFilter,
+    pub sort: LinkSort,
     pub page: u32,
     pub per_page: u32,
+    /// Reference time for active/expired evaluation (Unix millis, UTC).
+    pub now: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LinkListItem {
+    pub link: Link,
+    pub total_clicks: i64,
+    pub last_clicked_at: Option<i64>,
 }
 
 #[derive(Debug)]
 pub struct ListResult {
-    pub items: Vec<Link>,
+    pub items: Vec<LinkListItem>,
     pub total: i64,
     pub page: u32,
     pub per_page: u32,
+}
+
+/// Flat row for the list query: every link column plus click aggregates.
+#[derive(Debug, FromRow)]
+struct LinkListRow {
+    id: String,
+    slug: String,
+    target_url: String,
+    label: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    expires_at: Option<i64>,
+    disabled_at: Option<i64>,
+    total_clicks: i64,
+    last_clicked_at: Option<i64>,
+}
+
+impl From<LinkListRow> for LinkListItem {
+    fn from(r: LinkListRow) -> Self {
+        Self {
+            link: Link {
+                id: r.id,
+                slug: r.slug,
+                target_url: r.target_url,
+                label: r.label,
+                created_at: r.created_at,
+                updated_at: r.updated_at,
+                expires_at: r.expires_at,
+                disabled_at: r.disabled_at,
+            },
+            total_clicks: r.total_clicks,
+            last_clicked_at: r.last_clicked_at,
+        }
+    }
 }
 
 pub fn normalize_pagination(page: Option<i64>, per_page: Option<i64>) -> (u32, u32) {
@@ -141,21 +255,36 @@ pub fn normalize_pagination(page: Option<i64>, per_page: Option<i64>) -> (u32, u
     (page, per_page)
 }
 
-pub async fn list_links(pool: &SqlitePool, params: ListParams) -> Result<ListResult, AppError> {
-    let page = params.page.max(1);
-    let per_page = params.per_page.clamp(1, 100);
-    let offset = ((page - 1) as i64) * (per_page as i64);
+/// Status predicate fragment. Disabled takes precedence over expired, so the
+/// expired predicate only matches enabled links.
+fn status_predicate(status: StatusFilter) -> &'static str {
+    match status {
+        StatusFilter::All => "",
+        StatusFilter::Active => "disabled_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+        StatusFilter::Expired => {
+            "disabled_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?"
+        }
+        StatusFilter::Disabled => "disabled_at IS NOT NULL",
+    }
+}
 
-    let (count_sql, list_sql) = match params.query {
-        Some(ref q) if !q.trim().is_empty() => (
-            "SELECT COUNT(*) FROM links WHERE slug LIKE ? OR target_url LIKE ? OR label LIKE ?",
-            "SELECT * FROM links WHERE slug LIKE ? OR target_url LIKE ? OR label LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        ),
-        _ => (
-            "SELECT COUNT(*) FROM links",
-            "SELECT * FROM links ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        ),
-    };
+/// Ordering fragment. Every ordering ends in a stable secondary key; column
+/// names come only from this fixed match, never from query input.
+fn order_clause(sort: LinkSort) -> &'static str {
+    match sort {
+        LinkSort::Newest => "created_at DESC, slug ASC",
+        LinkSort::Oldest => "created_at ASC, slug ASC",
+        LinkSort::RecentlyUpdated => "updated_at DESC, slug ASC",
+        LinkSort::SlugAsc => "slug ASC",
+        LinkSort::MostClicked => {
+            "(SELECT COALESCE(SUM(click_count), 0) FROM link_daily_clicks WHERE link_id = links.id) DESC, slug ASC"
+        }
+    }
+}
+
+pub async fn list_links(pool: &SqlitePool, params: ListParams) -> Result<ListResult, AppError> {
+    let per_page = params.per_page.clamp(1, 100);
+    let needs_now = !matches!(params.status, StatusFilter::All | StatusFilter::Disabled);
 
     let like_opt = params.query.as_ref().and_then(|q| {
         let t = q.trim();
@@ -166,40 +295,59 @@ pub async fn list_links(pool: &SqlitePool, params: ListParams) -> Result<ListRes
         }
     });
 
-    let total: i64 = match like_opt {
-        Some(ref like) => {
-            sqlx::query_scalar(count_sql)
-                .bind(like)
-                .bind(like)
-                .bind(like)
-                .fetch_one(pool)
-                .await?
-        }
-        None => sqlx::query_scalar(count_sql).fetch_one(pool).await?,
-    };
+    let mut count_sql = String::from("SELECT COUNT(*) FROM links");
+    let mut list_sql = String::from(
+        "SELECT links.*,
+            COALESCE((SELECT SUM(click_count) FROM link_daily_clicks WHERE link_id = links.id), 0) AS total_clicks,
+            (SELECT MAX(last_clicked_at) FROM link_daily_clicks WHERE link_id = links.id) AS last_clicked_at
+         FROM links",
+    );
+    let mut filters: Vec<&str> = Vec::new();
+    let status_sql = status_predicate(params.status);
+    if !status_sql.is_empty() {
+        filters.push(status_sql);
+    }
+    if like_opt.is_some() {
+        filters.push("(slug LIKE ? OR target_url LIKE ? OR label LIKE ?)");
+    }
+    if !filters.is_empty() {
+        let clause = format!(" WHERE {}", filters.join(" AND "));
+        count_sql.push_str(&clause);
+        list_sql.push_str(&clause);
+    }
+    list_sql.push_str(" ORDER BY ");
+    list_sql.push_str(order_clause(params.sort));
+    list_sql.push_str(" LIMIT ? OFFSET ?");
 
-    let items: Vec<Link> = match like_opt {
-        Some(ref like) => {
-            sqlx::query_as::<_, Link>(list_sql)
-                .bind(like)
-                .bind(like)
-                .bind(like)
-                .bind(per_page as i64)
-                .bind(offset)
-                .fetch_all(pool)
-                .await?
-        }
-        None => {
-            sqlx::query_as::<_, Link>(list_sql)
-                .bind(per_page as i64)
-                .bind(offset)
-                .fetch_all(pool)
-                .await?
-        }
-    };
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+    if needs_now {
+        count_q = count_q.bind(params.now);
+    }
+    if let Some(ref like) = like_opt {
+        count_q = count_q.bind(like).bind(like).bind(like);
+    }
+    let total: i64 = count_q.fetch_one(pool).await?;
+
+    // Clamp pages past the end so an emptied last page still shows content.
+    let total_pages = ((total as f64) / (per_page as f64)).ceil() as u32;
+    let page = params.page.max(1).min(total_pages.max(1));
+    let offset = ((page - 1) as i64) * (per_page as i64);
+
+    let mut list_q = sqlx::query_as::<_, LinkListRow>(&list_sql);
+    if needs_now {
+        list_q = list_q.bind(params.now);
+    }
+    if let Some(ref like) = like_opt {
+        list_q = list_q.bind(like).bind(like).bind(like);
+    }
+    let rows: Vec<LinkListRow> = list_q
+        .bind(per_page as i64)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?;
 
     Ok(ListResult {
-        items,
+        items: rows.into_iter().map(LinkListItem::from).collect(),
         total,
         page,
         per_page,

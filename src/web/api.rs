@@ -5,11 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::links::{
     create_link, get_link, list_links, normalize_pagination, set_disabled, update_link, Link,
-    ListParams,
+    LinkSort, ListParams, StatusFilter,
 };
 use crate::domain::link::{CreateLinkInput, UpdateLinkInput};
 use crate::error::AppError;
-use crate::state::{millis_to_rfc3339, parse_expires_at, AppState};
+use crate::state::{millis_to_rfc3339, now_millis, parse_expires_at, AppState};
 use crate::web::security::{check_api_mutation_headers, require_json_content_type};
 
 // ---------------------------------------------------------------------------
@@ -170,8 +170,11 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
         &state.db,
         ListParams {
             query: q.q.filter(|s| !s.trim().is_empty()),
+            status: StatusFilter::All,
+            sort: LinkSort::Newest,
             page,
             per_page,
+            now: now_millis(),
         },
     )
     .await
@@ -180,7 +183,7 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
             let data = result
                 .items
                 .iter()
-                .map(|l| to_response(&state, l))
+                .map(|item| to_response(&state, &item.link))
                 .collect();
             let body = ListResponse {
                 data,
