@@ -4,6 +4,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use url::Url;
 
+const CSRF_SIGNING_KEY_PLACEHOLDER: &str = "replace-me-with-a-long-random-secret-at-least-32-bytes";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnv {
     Development,
@@ -49,14 +51,9 @@ impl Config {
             .parse()
             .with_context(|| format!("invalid BASE_URL {base_raw:?}"))?;
 
-        if base_url.host_str().is_none() {
-            anyhow::bail!("BASE_URL must be absolute with a host");
-        }
+        validate_base_url_shape(&base_url)?;
         if env.is_production() && base_url.scheme() != "https" {
             anyhow::bail!("in production BASE_URL must use https");
-        }
-        if !matches!(base_url.scheme(), "http" | "https") {
-            anyhow::bail!("BASE_URL scheme must be http or https");
         }
 
         let database_url = std::env::var("DATABASE_URL").context("DATABASE_URL is required")?;
@@ -102,13 +99,16 @@ impl Config {
 }
 
 fn decode_signing_key(raw: &str) -> Result<Vec<u8>> {
-    if raw.is_empty() {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
         anyhow::bail!("CSRF_SIGNING_KEY is required");
+    }
+    if trimmed == CSRF_SIGNING_KEY_PLACEHOLDER {
+        anyhow::bail!("CSRF_SIGNING_KEY still contains the public example placeholder");
     }
     // Try strict base64 (standard or url-safe) first; fall back to raw bytes.
     // This lets operators store either a base64 token or a plain passphrase,
     // as long as it carries >= 32 bytes.
-    let trimmed = raw.trim();
     if let Ok(bytes) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, trimmed) {
         if bytes.len() >= 32 {
             return Ok(bytes);
@@ -124,12 +124,27 @@ fn decode_signing_key(raw: &str) -> Result<Vec<u8>> {
     Ok(trimmed.as_bytes().to_vec())
 }
 
-fn origin_of(url: &Url) -> String {
-    let host = url.host_str().unwrap_or("");
-    match url.port() {
-        Some(p) => format!("{}://{}:{}", url.scheme(), host, p),
-        None => format!("{}://{}", url.scheme(), host),
+fn validate_base_url_shape(url: &Url) -> Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        anyhow::bail!("BASE_URL scheme must be http or https");
     }
+    if url.host_str().is_none() {
+        anyhow::bail!("BASE_URL must be absolute with a host");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        anyhow::bail!("BASE_URL must not contain credentials");
+    }
+    if url.path() != "/" {
+        anyhow::bail!("BASE_URL must not contain a path");
+    }
+    if url.query().is_some() || url.fragment().is_some() {
+        anyhow::bail!("BASE_URL must not contain a query or fragment");
+    }
+    Ok(())
+}
+
+fn origin_of(url: &Url) -> String {
+    url.origin().ascii_serialization()
 }
 
 #[cfg(test)]
@@ -148,5 +163,31 @@ mod tests {
     fn short_csrf_key_rejected() {
         let err = decode_signing_key("short").unwrap();
         assert!(err.len() < 32);
+    }
+
+    #[test]
+    fn public_csrf_placeholder_rejected() {
+        let err = decode_signing_key(CSRF_SIGNING_KEY_PLACEHOLDER).unwrap_err();
+        assert!(err.to_string().contains("placeholder"));
+    }
+
+    #[test]
+    fn base_url_must_be_a_root_http_url() {
+        for invalid in [
+            "ftp://go.example.com/",
+            "https://user:pass@go.example.com/",
+            "https://go.example.com/base",
+            "https://go.example.com/?query=1",
+            "https://go.example.com/#fragment",
+        ] {
+            let url: Url = invalid.parse().unwrap();
+            assert!(
+                validate_base_url_shape(&url).is_err(),
+                "must reject {invalid}"
+            );
+        }
+
+        let valid: Url = "https://go.example.com/".parse().unwrap();
+        assert!(validate_base_url_shape(&valid).is_ok());
     }
 }

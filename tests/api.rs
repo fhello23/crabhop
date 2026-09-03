@@ -290,3 +290,52 @@ async fn api_rejects_oversized_body() {
         "oversized body should be rejected, got {status}"
     );
 }
+
+#[tokio::test]
+async fn api_rejects_past_expirations_on_create_and_update() {
+    let app = setup().await;
+    let past = shortener::state::now_millis() - 60_000;
+
+    let create_body = format!(
+        r#"{{"target_url":"https://example.com/past","custom_slug":"pastcreate","expires_at":{past}}}"#
+    );
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req("POST", "/api/v1/links", Some(&create_body), true))
+        .await
+        .unwrap();
+    let (status, _, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.contains("future"), "{body}");
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req(
+            "POST",
+            "/api/v1/links",
+            Some(r#"{"target_url":"https://example.com/active","custom_slug":"pastupdate"}"#),
+            true,
+        ))
+        .await
+        .unwrap();
+    let (status, _, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let patch_body = format!(r#"{{"expires_at":{past}}}"#);
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req(
+            "PATCH",
+            "/api/v1/links/pastupdate",
+            Some(&patch_body),
+            true,
+        ))
+        .await
+        .unwrap();
+    let (status, _, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body.contains("future"), "{body}");
+}

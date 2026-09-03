@@ -57,6 +57,7 @@ async fn admin_create_and_edit_lifecycle() {
     let (status, _, body) = response_body_string(res).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("https://example.com/hello"));
+    assert!(body.contains("Expires in UTC"));
 
     // Update destination.
     let req = post_admin(

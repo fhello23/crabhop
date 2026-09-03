@@ -52,7 +52,7 @@ pub async fn create_link(
     let label = validate_label(input.label.as_deref())?;
 
     if let Some(exp) = input.expires_at {
-        if exp <= 0 {
+        if exp <= now_millis() {
             return Err(AppError::Validation(
                 "expires_at must be in the future".to_string(),
             ));
@@ -226,9 +226,9 @@ pub async fn update_link(
     if let Some(exp_in) = input.expires_at {
         expires_at = exp_in;
         if let Some(e) = expires_at {
-            if e <= 0 {
+            if e <= now_millis() {
                 return Err(AppError::Validation(
-                    "expires_at must be a positive timestamp".to_string(),
+                    "expires_at must be in the future".to_string(),
                 ));
             }
         }

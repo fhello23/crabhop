@@ -10,10 +10,11 @@ Requirements: Rust stable, Docker + Compose plugin.
 
 ```bash
 cp .env.example .env
-# Edit .env: set BASE_URL=http://localhost:8080 for local, generate CSRF key:
+# The example already uses localhost:8080. Replace the CSRF placeholder:
 #   openssl rand -base64 48
 # Generate Caddy password hash for local test:
 #   docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext 'dev-password'
+# Put the generated values in .env (escape each $ in the password hash as $$).
 
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
@@ -22,6 +23,8 @@ cargo test --all-features
 docker build -t go-shortener:latest .
 docker compose up --build
 # App: http://localhost:8080/{slug} (via Caddy), admin: http://localhost:8080/admin
+# Verify that Caddy, not the Rust process, enforces management authentication:
+ADMIN_PASSWORD=dev-password ./scripts/smoke-caddy-auth.sh http://localhost:8080
 ```
 
 Direct app run (dev, no Caddy):
@@ -43,10 +46,13 @@ cargo run
 | `DATABASE_URL` | yes | `sqlite:///data/go.db` |
 | `RUST_LOG` | no | `info` |
 | `CSRF_SIGNING_KEY` | yes (≥32 bytes) | `openssl rand -base64 48` |
-| `SITE_ADDRESS` | yes (Caddy only) | your public domain |
+| `SITE_ADDRESS` | yes (Caddy only) | local: `http://localhost`; production: `go.fhola.com` |
+| `CADDY_HTTP_HOST` / `CADDY_HTTP_PORT` | no | local: `127.0.0.1` / `8080`; production: `0.0.0.0` / `80` |
+| `CADDY_HTTPS_HOST` / `CADDY_HTTPS_PORT` | no | local: `127.0.0.1` / `8443`; production: `0.0.0.0` / `443` |
 | `ADMIN_PASSWORD_HASH` | yes (Caddy only) | Argon2id hash from `caddy hash-password` |
 
-Rules: production refuses non-HTTPS `BASE_URL` and short/missing CSRF keys.
+Rules: `BASE_URL` must be a root HTTP(S) URL without credentials, query, or fragment.
+Production refuses non-HTTPS URLs, short/missing CSRF keys, and the public example placeholder.
 Never commit `.env` or hashes.
 
 ## Routes
@@ -73,8 +79,9 @@ GET   /{slug} / HEAD /{slug}   302 active / 404 unknown+disabled / 410 expired
 
 Redirects carry `Cache-Control: no-store` + `X-Robots-Tag: noindex, nofollow`.
 API errors are `{"error":{"message":"…","code":NNN}}`; `deny_unknown_fields` is on.
-`expires_at` accepts RFC 3339 (`2026-12-31T23:59:59Z`) or Unix millis; admin forms
-also accept `datetime-local` (`YYYY-MM-DDTHH:MM`, UTC).
+`expires_at` must be in the future and accepts RFC 3339
+(`2026-12-31T23:59:59Z`) or Unix millis. Admin date fields are explicitly UTC
+and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
 
 ## Security model
 
@@ -96,6 +103,8 @@ also accept `datetime-local` (`YYYY-MM-DDTHH:MM`, UTC).
 3. DNS: `<your-domain> A → <host IP>`.
 4. On server, create restricted `.env` (mode 600): `APP_ENV=production`,
    `BASE_URL=https://<your-domain>`, `SITE_ADDRESS=<your-domain>`,
+   `CADDY_HTTP_HOST=0.0.0.0`, `CADDY_HTTP_PORT=80`,
+   `CADDY_HTTPS_HOST=0.0.0.0`, `CADDY_HTTPS_PORT=443`,
    `DATABASE_URL=sqlite:///data/go.db`,
    `CSRF_SIGNING_KEY` (48 random bytes), `ADMIN_PASSWORD_HASH`
    (`docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext '…'`).
@@ -105,7 +114,15 @@ also accept `datetime-local` (`YYYY-MM-DDTHH:MM`, UTC).
 5. `docker compose up -d --build`; verify: `https://<your-domain>/health/live`,
    HTTP→HTTPS redirect, `/admin` prompts for password, app port not reachable
    externally (`ss -tlnp` shows only 80/443).
-6. Throttling: add Caddy `rate_limit` or host `fail2ban` for `/admin* /api*`.
+6. Install fail2ban, copy `deploy/fail2ban/filter.d/crabhop-caddy.conf` into
+   `/etc/fail2ban/filter.d/`, and copy the jail example into
+   `/etc/fail2ban/jail.d/crabhop-caddy.local`. Update its `logpath` with the
+   mountpoint reported by `docker volume inspect crabhop_caddy-logs`, then
+   restart fail2ban. The shipped policy bans five management-route 401s in ten
+   minutes for one hour through Docker's `DOCKER-USER` firewall chain. Verify
+   it with `fail2ban-client status crabhop-caddy`.
+7. Run `ADMIN_PASSWORD='<plaintext password>' ./scripts/smoke-caddy-auth.sh
+   https://<your-domain>` and confirm the fail2ban jail is active.
 
 ## Upgrade / rollback
 
@@ -134,8 +151,9 @@ also accept `datetime-local` (`YYYY-MM-DDTHH:MM`, UTC).
   docker run --rm -v test-restore:/data -v "$PWD:/b" alpine cp /b/go-backup.db /data/go.db
   # point compose at test volume, up, verify /health/ready + known redirect
   ```
-- Monitor: health endpoint + one known redirect; log rotation via Docker defaults;
-  alert on disk usage of `app-data`/`caddy-data`.
+- Monitor: health endpoint + one known redirect and alert on disk usage of
+  `app-data`, `caddy-data`, and `caddy-logs`. Compose caps container logs at
+  5 × 10 MiB per service; Caddy rolls ten 10 MiB access logs for at most 30 days.
 
 ## CI
 
@@ -145,6 +163,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo audit
 docker build .
+ADMIN_PASSWORD=... ./scripts/smoke-caddy-auth.sh http://localhost:8080
 ```
 
 Do not auto-deploy production from unprotected branches; deploy tagged images.

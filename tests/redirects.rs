@@ -81,14 +81,24 @@ async fn disabled_link_returns_404() {
 #[tokio::test]
 async fn expired_link_returns_410() {
     let app = setup().await;
-    let past = shortener::state::now_millis() - 1_000;
+    let future = shortener::state::now_millis() + 60_000;
     let slug = create_link(
         &app.state,
         Some("oldlink"),
         "https://example.com/old",
-        Some(past),
+        Some(future),
     )
     .await;
+
+    // Public writes reject past expirations. Move this fixture into the past
+    // directly so redirect behavior for previously-valid links is still tested.
+    let past = shortener::state::now_millis() - 1_000;
+    sqlx::query("UPDATE links SET expires_at = ? WHERE slug = ?")
+        .bind(past)
+        .bind(&slug)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
     let res = app
         .router
         .clone()

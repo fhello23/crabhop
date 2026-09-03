@@ -1,0 +1,13 @@
+[crabhop-caddy]
+enabled = true
+filter = crabhop-caddy
+# Replace this with the Mountpoint printed by:
+# docker volume inspect crabhop_caddy-logs --format '{{ .Mountpoint }}'
+logpath = /var/lib/docker/volumes/crabhop_caddy-logs/_data/access.log
+backend = auto
+port = http,https
+# Published Docker ports traverse FORWARD; insert the ban in Docker's user chain.
+chain = DOCKER-USER
+maxretry = 5
+findtime = 10m
+bantime = 1h
