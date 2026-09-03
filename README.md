@@ -1,4 +1,4 @@
-# `go.example.com` Link Shortener
+# Crabhop
 
 Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy.
 Implements `plan.md` MVP: public redirects, browser admin UI, protected JSON API,
@@ -46,7 +46,7 @@ cargo run
 | `DATABASE_URL` | yes | `sqlite:///data/go.db` |
 | `RUST_LOG` | no | `info` |
 | `CSRF_SIGNING_KEY` | yes (≥32 bytes) | `openssl rand -base64 48` |
-| `SITE_ADDRESS` | yes (Caddy only) | local: `http://localhost`; production: `go.fhola.com` |
+| `SITE_ADDRESS` | yes (Caddy only) | local: `http://localhost`; production: `<your-domain>` |
 | `CADDY_HTTP_HOST` / `CADDY_HTTP_PORT` | no | local: `127.0.0.1` / `8080`; production: `0.0.0.0` / `80` |
 | `CADDY_HTTPS_HOST` / `CADDY_HTTPS_PORT` | no | local: `127.0.0.1` / `8443`; production: `0.0.0.0` / `443` |
 | `ADMIN_PASSWORD_HASH` | yes (Caddy only) | Argon2id hash from `caddy hash-password` |
@@ -124,11 +124,41 @@ and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
 7. Run `ADMIN_PASSWORD='<plaintext password>' ./scripts/smoke-caddy-auth.sh
    https://<your-domain>` and confirm the fail2ban jail is active.
 
+### Updating an existing VPS
+
+Run the deployment script as the VPS user that owns the checkout and can use
+Docker. It finds the repository relative to itself, so it can be invoked from
+any working directory:
+
+```bash
+/opt/crabhop/scripts/deploy-vps.sh
+```
+
+The script refuses tracked local changes, pulls with `git pull --ff-only`,
+rebuilds the Rust image, recreates changed services, waits for both internal and
+public readiness, and restores the previous application image if verification
+fails. After a successful deployment it deletes previous and dangling Crabhop
+images by their image ID/label. It does not run a global Docker prune and cannot
+remove images or volumes belonging to other applications on the VPS.
+
+The public check uses `BASE_URL`. For a VPS that cannot connect to its own public
+address, set `PUBLIC_HEALTHCHECK_URL` to another Caddy-reachable URL, or use
+`SKIP_PUBLIC_HEALTHCHECK=true` only when an external monitor verifies Caddy.
+
+If the checkout lives somewhere else and the script was copied outside it, set
+the location explicitly:
+
+```bash
+CRABHOP_DIR=/srv/crabhop /usr/local/bin/deploy-crabhop
+```
+
 ## Upgrade / rollback
 
-- Images are pinned by tag; keep previous image: `docker tag go-shortener:latest go-shortener:prev`.
-- Upgrade: `docker compose pull && docker compose up -d --build && docker compose ps`.
-- Rollback: `docker tag go-shortener:prev go-shortener:latest && docker compose up -d`.
+- Upgrade with `scripts/deploy-vps.sh`; it temporarily preserves the running
+  image and restores it automatically if startup or readiness verification fails.
+- After a successful deployment the previous image is deleted as part of the
+  requested cleanup. To return to an older release later, revert that Git commit,
+  push the revert, and run the deployment script again.
 - SQLite migrations run at startup and are backwards-compatible (additive only).
 
 ## Credential rotation

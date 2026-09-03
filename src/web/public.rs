@@ -10,7 +10,9 @@ pub async fn landing(State(state): State<AppState>) -> Html<String> {
     let host = state.config.base_url.host_str().unwrap_or("shortener");
     Html(format!(
         "<!doctype html><html><head><title>{host}</title></head>\
-         <body><h1>{host}</h1><p>Private link shortener.</p></body></html>"
+         <body><h1>{host}</h1><p>Private link shortener.</p>\
+         <p><small>Want your own? Check it out at \
+         <a href=\"https://github.com/fhello23/crabhop\">github.com/fhello23/crabhop</a>.</small></p></body></html>"
     ))
 }
 
