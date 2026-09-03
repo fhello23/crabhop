@@ -1,9 +1,11 @@
 mod common;
 
+use axum::http::StatusCode;
 use common::setup;
 use shortener::db::analytics::{
     day_start_utc, get_link_activity, link_stats, record_click, MILLIS_PER_DAY,
 };
+use tower::ServiceExt;
 
 /// 2024-01-01T00:00:00Z, a UTC midnight used to pin day-boundary tests.
 const MIDNIGHT: i64 = 1_704_067_200_000;
@@ -107,4 +109,113 @@ async fn activity_series_is_complete_and_zero_filled() {
     assert_eq!(empty.last_clicked_at, None);
     assert_eq!(empty.daily.len(), 30);
     assert!(empty.daily.iter().all(|d| d.click_count == 0));
+}
+
+async fn get_status(
+    app: &common::TestApp,
+    method: &str,
+    uri: &str,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let req = axum::http::Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    common::response_body_string(res).await
+}
+
+async fn total_clicks(app: &common::TestApp, slug: &str) -> i64 {
+    let link = shortener::db::links::get_link(&app.state.db, slug)
+        .await
+        .unwrap();
+    link_stats(&app.state.db, &link.id).await.unwrap().0
+}
+
+#[tokio::test]
+async fn two_get_redirects_increment_twice() {
+    let app = setup().await;
+    common::create_link(
+        &app.state,
+        Some("counted"),
+        "https://example.com/counted",
+        None,
+    )
+    .await;
+
+    for _ in 0..2 {
+        let (status, _, _) = get_status(&app, "GET", "/counted").await;
+        assert_eq!(status, StatusCode::FOUND);
+    }
+    assert_eq!(total_clicks(&app, "counted").await, 2);
+}
+
+#[tokio::test]
+async fn head_missing_disabled_and_expired_produce_no_click() {
+    let app = setup().await;
+    common::create_link(&app.state, Some("nohead"), "https://example.com/x", None).await;
+    common::create_link(&app.state, Some("off"), "https://example.com/x", None).await;
+    shortener::db::links::set_disabled(&app.state.db, "off", true)
+        .await
+        .unwrap();
+
+    // HEAD answers like GET but is never counted (health checks stay clean).
+    let (status, _, _) = get_status(&app, "HEAD", "/nohead").await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(total_clicks(&app, "nohead").await, 0);
+
+    // Unknown slugs 404 with nothing to attribute.
+    let (status, _, _) = get_status(&app, "GET", "/definitely-missing").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Disabled links 404 and expired links 410, both uncounted.
+    let (status, _, _) = get_status(&app, "GET", "/off").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(total_clicks(&app, "off").await, 0);
+
+    let future = shortener::state::now_millis() + 60_000;
+    common::create_link(
+        &app.state,
+        Some("stale"),
+        "https://example.com/x",
+        Some(future),
+    )
+    .await;
+    // Backdate past the create-time future check so the link reads expired.
+    let past = shortener::state::now_millis() - 1_000;
+    sqlx::query("UPDATE links SET expires_at = ? WHERE slug = ?")
+        .bind(past)
+        .bind("stale")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    let (status, _, _) = get_status(&app, "GET", "/stale").await;
+    assert_eq!(status, StatusCode::GONE);
+    assert_eq!(total_clicks(&app, "stale").await, 0);
+}
+
+#[tokio::test]
+async fn analytics_failure_leaves_redirects_functional() {
+    let app = setup().await;
+    common::create_link(
+        &app.state,
+        Some("resilient"),
+        "https://example.com/resilient",
+        None,
+    )
+    .await;
+
+    // Simulate a broken analytics store: the links table (and its rows)
+    // survive, but recording must fail.
+    sqlx::query("DROP TABLE link_daily_clicks")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
+    let (status, headers, _) = get_status(&app, "GET", "/resilient").await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(
+        headers.get(axum::http::header::LOCATION).unwrap(),
+        "https://example.com/resilient"
+    );
 }
