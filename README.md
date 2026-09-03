@@ -16,11 +16,16 @@ Requirements: Rust stable, Docker + Compose plugin.
 
 ```bash
 cp .env.example .env
-# The example already uses localhost:8080. Replace the CSRF placeholder:
+# The example already uses localhost:8080. Generate two SEPARATE secrets —
+# they serve different purposes and must differ:
+#   CSRF signing key   -> CSRF_SIGNING_KEY
+#   Caddy-to-app proof -> UPSTREAM_AUTH_TOKEN
+# Generate each with:
 #   openssl rand -base64 48
 # Generate Caddy password hash for local test:
 #   docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext 'dev-password'
 # Put the generated values in .env (escape each $ in the password hash as $$).
+# The stack refuses to start with the example placeholders.
 
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
@@ -29,8 +34,9 @@ cargo test --all-features
 docker build -t go-shortener:latest .
 docker compose up --build
 # App: http://localhost:8080/{slug} (via Caddy), admin: http://localhost:8080/admin
-# Verify that Caddy, not the Rust process, enforces management authentication:
-ADMIN_PASSWORD=dev-password ./scripts/smoke-caddy-auth.sh http://localhost:8080
+# Verify the full boundary: Caddy's Basic Auth at the edge AND the app's own
+# proxy-token gate (direct requests without the token fail closed with 401):
+ADMIN_PASSWORD=dev-password SMOKE_APP_CONTAINER="$(docker compose ps -q shortener)" ./scripts/smoke-caddy-auth.sh http://localhost:8080
 ```
 
 Direct app run (dev, no Caddy):
@@ -38,9 +44,14 @@ Direct app run (dev, no Caddy):
 ```bash
 export APP_ENV=development APP_BIND=127.0.0.1:3000 \
   BASE_URL=http://localhost:3000 DATABASE_URL='sqlite://./dev.db?mode=rwc' \
-  RUST_LOG=debug CSRF_SIGNING_KEY="$(openssl rand -base64 48)"
+  RUST_LOG=debug CSRF_SIGNING_KEY="$(openssl rand -base64 48)" \
+  UPSTREAM_AUTH_ALLOW_DIRECT=true
 cargo run
 ```
+
+`UPSTREAM_AUTH_ALLOW_DIRECT=true` permits direct management access without the
+proxy token, but only because all three hold: development env, explicit flag,
+loopback bind. Production ignores the flag entirely.
 
 ## Configuration
 
@@ -52,6 +63,8 @@ cargo run
 | `DATABASE_URL` | yes | `sqlite:///data/go.db` |
 | `RUST_LOG` | no | `info` |
 | `CSRF_SIGNING_KEY` | yes (≥32 bytes) | `openssl rand -base64 48` |
+| `UPSTREAM_AUTH_TOKEN` | yes in production (≥32 chars) | `openssl rand -base64 48` |
+| `UPSTREAM_AUTH_ALLOW_DIRECT` | no (default `false`) | `true` enables direct dev access only |
 | `SITE_ADDRESS` | yes (Caddy only) | local: `http://localhost`; production: `<your-domain>` |
 | `CADDY_HTTP_HOST` / `CADDY_HTTP_PORT` | no | local: `127.0.0.1` / `8080`; production: `0.0.0.0` / `80` |
 | `CADDY_HTTPS_HOST` / `CADDY_HTTPS_PORT` | no | local: `127.0.0.1` / `8443`; production: `0.0.0.0` / `443` |
@@ -91,14 +104,24 @@ and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
 
 ## Security model
 
-- Caddy `basic_auth argon2id` guards `/admin*` + `/api*` (exact matcher in `Caddyfile`);
+- Management routes (`/admin*`, `/api*`) require **two** proofs: Caddy's
+  `basic_auth argon2id` at the edge, and the `X-Crabhop-Proxy-Token` header the
+  app checks on every management request. Caddy strips any client-supplied
+  value and injects the shared `UPSTREAM_AUTH_TOKEN` when proxying, so even an
+  accidentally exposed port 3000 fails closed with 401 and leaks nothing.
+  `X-Authenticated-User` is informational only and never trusted by itself;
   upstream never sees `Authorization` (`header_up -Authorization`).
 - Admin POSTs: signed double-submit CSRF cookie (`HttpOnly; SameSite=Strict; Path=/;
   Secure` on https) + `Origin`/`Referer` must match `BASE_URL`. Missing both → 403.
 - API mutations: require `Content-Type: application/json` + `X-Requested-With`
   header; no CORS headers are ever emitted.
 - Headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `Referrer-Policy: no-referrer`, restrictive CSP on `/admin`.
+  `Referrer-Policy: same-origin`, restrictive CSP on `/admin`.
+  Every `/admin` and `/api` response carries `Cache-Control: no-store` so
+  private link data is never retained in browser caches.
+- Production HTTPS responses carry
+  `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`, no
+  preload — add them only after review).
 - Body cap 16 KiB, 10 s timeout, Askama auto-escaping, no credential/URL logging,
   non-root read-only container (writable `/data` only).
 
@@ -112,7 +135,10 @@ and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
    `CADDY_HTTP_HOST=0.0.0.0`, `CADDY_HTTP_PORT=80`,
    `CADDY_HTTPS_HOST=0.0.0.0`, `CADDY_HTTPS_PORT=443`,
    `DATABASE_URL=sqlite:///data/go.db`,
-   `CSRF_SIGNING_KEY` (48 random bytes), `ADMIN_PASSWORD_HASH`
+   `CSRF_SIGNING_KEY` (48 random bytes),
+   `UPSTREAM_AUTH_TOKEN` (`openssl rand -base64 48`; leave
+   `UPSTREAM_AUTH_ALLOW_DIRECT` unset — production ignores it),
+   `ADMIN_PASSWORD_HASH`
    (`docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext '…'`).
    Because argon2id hashes contain `$`, write each one as `$$` in `.env`
    (Compose interpolates unescaped `$VAR` and would corrupt the hash —
@@ -166,12 +192,19 @@ CRABHOP_DIR=/srv/crabhop /usr/local/bin/deploy-crabhop
   requested cleanup. To return to an older release later, revert that Git commit,
   push the revert, and run the deployment script again.
 - SQLite migrations run at startup and are backwards-compatible (additive only).
+- Dependabot proposes weekly Cargo and container-image updates as pull requests.
+  Before deploying an image bump, review the new image's vulnerability report,
+  update the digest pin, and let CI rebuild and re-verify.
 
 ## Credential rotation
 
 - **Admin password:** regenerate hash, update server `.env`, `docker compose up -d caddy`.
 - **CSRF key:** set new `CSRF_SIGNING_KEY`, `docker compose up -d shortener`
   (existing sessions/cookies invalidate once; users re-load `/admin`).
+- **Proxy token:** generate a new `UPSTREAM_AUTH_TOKEN`, update the server
+  `.env` (both services share it), then `docker compose up -d` to recycle app
+  and Caddy together. Between the two restarts, management requests may 401 —
+  rotate during a maintenance window and verify with the smoke test below.
 
 ## Backups & restore
 
@@ -193,13 +226,17 @@ CRABHOP_DIR=/srv/crabhop /usr/local/bin/deploy-crabhop
 
 ## CI
 
+Every pull request runs `.github/workflows/ci.yml`:
+
 ```text
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
-cargo audit
+cargo audit            # honors .cargo/audit.toml (dated, scoped ignores only)
 docker build .
-ADMIN_PASSWORD=... ./scripts/smoke-caddy-auth.sh http://localhost:8080
+compose startup + Caddy authentication smoke test (scripts/smoke-caddy-auth.sh),
+an end-to-end link lifecycle through the proxy, and a check that port 3000
+is not published
 ```
 
 Do not auto-deploy production from unprotected branches; deploy tagged images.

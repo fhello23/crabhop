@@ -55,6 +55,14 @@ pub fn app_router(state: AppState) -> Router {
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(10),
         ))
+        // Fail-closed management gate. Placed inside tracing (rejected probes
+        // are logged) and inside the security-headers layer (401s still get
+        // hardening headers), but outside timeout/body-limit so
+        // unauthenticated requests never buffer a body.
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security::management_auth_mw,
+        ))
         // Request logging deliberately excludes Authorization/Cookie headers
         // (TraceLayer default logs method/path/status/latency only).
         .layer(

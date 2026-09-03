@@ -3,7 +3,7 @@ mod common;
 use axum::http::{header, StatusCode};
 use tower::ServiceExt;
 
-use common::{response_body_string, setup};
+use common::{response_body_string, setup, with_proxy_token};
 
 const API_HDR: &str = "X-Requested-With";
 
@@ -13,7 +13,7 @@ fn api_req(
     json: Option<&str>,
     with_api_header: bool,
 ) -> axum::http::Request<axum::body::Body> {
-    let mut b = axum::http::Request::builder().method(method).uri(uri);
+    let mut b = with_proxy_token(axum::http::Request::builder().method(method).uri(uri));
     if json.is_some() {
         b = b.header(header::CONTENT_TYPE, "application/json");
     }
@@ -158,15 +158,17 @@ async fn api_rejects_missing_custom_header_and_content_type() {
     assert_eq!(status, StatusCode::FORBIDDEN, "body: {body}");
 
     // Wrong content type.
-    let req = axum::http::Request::builder()
-        .method("POST")
-        .uri("/api/v1/links")
-        .header(header::CONTENT_TYPE, "text/plain")
-        .header(API_HDR, "XMLHttpRequest")
-        .body(axum::body::Body::from(
-            r#"{"target_url":"https://example.com/x"}"#,
-        ))
-        .unwrap();
+    let req = with_proxy_token(
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v1/links"),
+    )
+    .header(header::CONTENT_TYPE, "text/plain")
+    .header(API_HDR, "XMLHttpRequest")
+    .body(axum::body::Body::from(
+        r#"{"target_url":"https://example.com/x"}"#,
+    ))
+    .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
     let (status, _, _) = response_body_string(res).await;
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);

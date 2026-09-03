@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use url::Url;
 
 const CSRF_SIGNING_KEY_PLACEHOLDER: &str = "replace-me-with-a-long-random-secret-at-least-32-bytes";
+const UPSTREAM_AUTH_TOKEN_PLACEHOLDER: &str = "replace-me-with-a-long-random-upstream-token";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppEnv {
@@ -26,7 +27,7 @@ impl AppEnv {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub env: AppEnv,
     pub bind: SocketAddr,
@@ -34,6 +35,31 @@ pub struct Config {
     pub base_origin: String,
     pub database_url: String,
     pub csrf_signing_key: Vec<u8>,
+    /// Proof that a management request arrived through Caddy. Compared in
+    /// constant time against the `X-Crabhop-Proxy-Token` request header.
+    /// `None` only in development without a token; management routes then
+    /// fail closed unless the explicit loopback bypass applies.
+    pub upstream_auth_token: Option<String>,
+    /// Direct (non-proxied) management access. True only when ALL hold:
+    /// development env, explicitly enabled, loopback bind. Never true in
+    /// production.
+    pub allow_direct_management: bool,
+}
+
+// Secrets must never appear in logs; Debug redacts them.
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("env", &self.env)
+            .field("bind", &self.bind)
+            .field("base_url", &self.base_url)
+            .field("base_origin", &self.base_origin)
+            .field("database_url", &self.database_url)
+            .field("csrf_signing_key", &"<redacted>")
+            .field("upstream_auth_token", &"<redacted>")
+            .field("allow_direct_management", &self.allow_direct_management)
+            .finish()
+    }
 }
 
 impl Config {
@@ -72,6 +98,14 @@ impl Config {
 
         let base_origin = origin_of(&base_url);
 
+        let upstream_raw = std::env::var("UPSTREAM_AUTH_TOKEN").unwrap_or_default();
+        let upstream_auth_token = decode_upstream_token(&upstream_raw, env)?;
+
+        let allow_direct_requested = std::env::var("UPSTREAM_AUTH_ALLOW_DIRECT")
+            .map(|v| v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let allow_direct_management = direct_bypass_permitted(env, allow_direct_requested, bind);
+
         Ok(Arc::new(Self {
             env,
             bind,
@@ -79,23 +113,70 @@ impl Config {
             base_origin,
             database_url,
             csrf_signing_key,
+            upstream_auth_token,
+            allow_direct_management,
         }))
     }
 
     /// Test/development helper that bypasses environment variables.
-    pub fn for_tests(base_url: &str, database_url: &str, csrf_key: &str) -> Arc<Self> {
+    pub fn for_tests(
+        base_url: &str,
+        database_url: &str,
+        csrf_key: &str,
+        upstream_token: &str,
+        allow_direct: bool,
+    ) -> Arc<Self> {
         let base_url: Url = base_url.parse().expect("valid test BASE_URL");
         let base_origin = origin_of(&base_url);
         assert!(csrf_key.len() >= 32, "test CSRF key must be >= 32 bytes");
+        assert!(
+            upstream_token.len() >= 32,
+            "test upstream token must be >= 32 bytes"
+        );
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         Arc::new(Self {
             env: AppEnv::Development,
-            bind: "127.0.0.1:0".parse().unwrap(),
+            bind,
             base_url,
             base_origin,
             database_url: database_url.to_string(),
             csrf_signing_key: csrf_key.as_bytes().to_vec(),
+            upstream_auth_token: Some(upstream_token.to_string()),
+            allow_direct_management: direct_bypass_permitted(
+                AppEnv::Development,
+                allow_direct,
+                bind,
+            ),
         })
     }
+}
+
+/// The direct-access bypass is a development convenience, never a production
+/// feature: every condition is required, and production fails the first one.
+fn direct_bypass_permitted(env: AppEnv, explicitly_enabled: bool, bind: SocketAddr) -> bool {
+    matches!(env, AppEnv::Development) && explicitly_enabled && bind.ip().is_loopback()
+}
+
+/// Parse the proxy token. The raw value is compared verbatim against the
+/// header Caddy injects, so no base64 decoding happens here — length is
+/// enforced on the raw string (`openssl rand -base64 48` yields 64 chars).
+fn decode_upstream_token(raw: &str, env: AppEnv) -> Result<Option<String>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        if env.is_production() {
+            anyhow::bail!("UPSTREAM_AUTH_TOKEN is required in production");
+        }
+        return Ok(None);
+    }
+    if trimmed == UPSTREAM_AUTH_TOKEN_PLACEHOLDER {
+        anyhow::bail!("UPSTREAM_AUTH_TOKEN still contains the public example placeholder");
+    }
+    if trimmed.len() < 32 {
+        anyhow::bail!(
+            "UPSTREAM_AUTH_TOKEN must be at least 32 characters (generate with `openssl rand -base64 48`)"
+        );
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 fn decode_signing_key(raw: &str) -> Result<Vec<u8>> {
@@ -189,5 +270,60 @@ mod tests {
 
         let valid: Url = "https://go.example.com/".parse().unwrap();
         assert!(validate_base_url_shape(&valid).is_ok());
+    }
+
+    #[test]
+    fn upstream_token_rules() {
+        let long_enough = "a-test-upstream-token-0123456789abcdef";
+        assert!(decode_upstream_token(long_enough, AppEnv::Production)
+            .unwrap()
+            .is_some());
+        // Placeholder is rejected even though it is long enough.
+        assert!(
+            decode_upstream_token(UPSTREAM_AUTH_TOKEN_PLACEHOLDER, AppEnv::Production).is_err()
+        );
+        assert!(
+            decode_upstream_token(UPSTREAM_AUTH_TOKEN_PLACEHOLDER, AppEnv::Development).is_err()
+        );
+        // Short tokens are rejected wherever they appear.
+        assert!(decode_upstream_token("short", AppEnv::Production).is_err());
+        assert!(decode_upstream_token("short", AppEnv::Development).is_err());
+        // Missing token fails closed in production, stays unset in development.
+        assert!(decode_upstream_token("", AppEnv::Production).is_err());
+        assert!(decode_upstream_token("   ", AppEnv::Production).is_err());
+        assert!(decode_upstream_token("", AppEnv::Development)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn direct_bypass_never_in_production() {
+        let loopback: SocketAddr = "127.0.0.1:3000".parse().unwrap();
+        let public: SocketAddr = "0.0.0.0:3000".parse().unwrap();
+        // Production forbids the bypass no matter what.
+        assert!(!direct_bypass_permitted(AppEnv::Production, true, loopback));
+        // Development requires the explicit flag AND a loopback bind.
+        assert!(direct_bypass_permitted(AppEnv::Development, true, loopback));
+        assert!(!direct_bypass_permitted(
+            AppEnv::Development,
+            false,
+            loopback
+        ));
+        assert!(!direct_bypass_permitted(AppEnv::Development, true, public));
+    }
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let config = Config::for_tests(
+            "http://localhost",
+            "sqlite::memory:",
+            "test-csrf-signing-key-0123456789abcdef",
+            "a-test-upstream-token-0123456789abcdef",
+            false,
+        );
+        let rendered = format!("{config:?}");
+        assert!(!rendered.contains("test-csrf-signing-key"), "{rendered}");
+        assert!(!rendered.contains("test-upstream-token"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
     }
 }

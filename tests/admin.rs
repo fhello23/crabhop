@@ -3,7 +3,7 @@ mod common;
 use axum::http::{header, StatusCode};
 use tower::ServiceExt;
 
-use common::{get_admin_csrf, response_body_string, setup};
+use common::{get_admin_csrf, response_body_string, setup, with_proxy_token};
 
 fn post_admin(
     uri: &str,
@@ -12,9 +12,7 @@ fn post_admin(
     cookie: &str,
     origin: Option<&str>,
 ) -> axum::http::Request<axum::body::Body> {
-    let mut b = axum::http::Request::builder()
-        .method("POST")
-        .uri(uri)
+    let mut b = with_proxy_token(axum::http::Request::builder().method("POST").uri(uri))
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(header::COOKIE, format!("csrf_token={cookie}"));
     if let Some(o) = origin {
@@ -49,8 +47,7 @@ async fn admin_create_and_edit_lifecycle() {
     assert!(loc.contains("lifecycle1"), "location: {loc}");
 
     // Edit form shows values.
-    let req = axum::http::Request::builder()
-        .uri("/admin/links/lifecycle1")
+    let req = with_proxy_token(axum::http::Request::builder().uri("/admin/links/lifecycle1"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
@@ -119,16 +116,18 @@ async fn admin_rejects_missing_or_invalid_csrf() {
     let (token, cookie) = get_admin_csrf(&app).await;
 
     // Missing token.
-    let req = axum::http::Request::builder()
-        .method("POST")
-        .uri("/admin/links")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::COOKIE, format!("csrf_token={cookie}"))
-        .header(header::ORIGIN, "http://localhost")
-        .body(axum::body::Body::from(
-            "target_url=https%3A%2F%2Fexample.com%2Fx",
-        ))
-        .unwrap();
+    let req = with_proxy_token(
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/admin/links"),
+    )
+    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+    .header(header::COOKIE, format!("csrf_token={cookie}"))
+    .header(header::ORIGIN, "http://localhost")
+    .body(axum::body::Body::from(
+        "target_url=https%3A%2F%2Fexample.com%2Fx",
+    ))
+    .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
     let (status, _, _) = response_body_string(res).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -146,15 +145,17 @@ async fn admin_rejects_missing_or_invalid_csrf() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     // Missing Origin AND Referer.
-    let req = axum::http::Request::builder()
-        .method("POST")
-        .uri("/admin/links")
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::COOKIE, format!("csrf_token={cookie}"))
-        .body(axum::body::Body::from(format!(
-            "target_url=https%3A%2F%2Fexample.com%2Fx&csrf_token={token}"
-        )))
-        .unwrap();
+    let req = with_proxy_token(
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/admin/links"),
+    )
+    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+    .header(header::COOKIE, format!("csrf_token={cookie}"))
+    .body(axum::body::Body::from(format!(
+        "target_url=https%3A%2F%2Fexample.com%2Fx&csrf_token={token}"
+    )))
+    .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
     let (status, _, _) = response_body_string(res).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -190,8 +191,7 @@ async fn admin_escapes_stored_values() {
     .unwrap();
     assert_eq!(direct.slug, "escapetest");
 
-    let req = axum::http::Request::builder()
-        .uri("/admin")
+    let req = with_proxy_token(axum::http::Request::builder().uri("/admin"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
@@ -207,8 +207,7 @@ async fn admin_escapes_stored_values() {
     );
 
     // Security headers on admin pages.
-    let req = axum::http::Request::builder()
-        .uri("/admin")
+    let req = with_proxy_token(axum::http::Request::builder().uri("/admin"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();
@@ -219,8 +218,7 @@ async fn admin_escapes_stored_values() {
     assert!(headers.contains_key("Content-Security-Policy"));
 
     // CSRF cookie attributes.
-    let req = axum::http::Request::builder()
-        .uri("/admin")
+    let req = with_proxy_token(axum::http::Request::builder().uri("/admin"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();

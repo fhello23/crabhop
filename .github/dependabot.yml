@@ -1,0 +1,23 @@
+# Automated dependency update proposals (reviewed by a human before merge).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    # Cargo updates land as PRs; CI runs fmt/clippy/tests/audit/build on each.
+    # Pay special attention to sqlx (minimal feature set is load-bearing for
+    # keeping rsa out of the compiled graph) and re-verify with
+    # `cargo tree --target all -i rsa` when sqlx changes.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    # Base-image and Caddy digest bumps land as PRs; review the image's
+    # vulnerability report, then update the pin and rebuild before deploying.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    # Compose-file image references (e.g. Caddy) get their own proposals so a
+    # service image can move independently of the Dockerfile base images.

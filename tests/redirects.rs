@@ -119,7 +119,6 @@ async fn reserved_routes_win_over_slug_lookup() {
         ("/robots.txt", StatusCode::OK),
         ("/health/live", StatusCode::OK),
         ("/health/ready", StatusCode::OK),
-        ("/admin", StatusCode::OK),
         ("/static/app.css", StatusCode::OK),
     ] {
         let req = axum::http::Request::builder()
@@ -130,6 +129,16 @@ async fn reserved_routes_win_over_slug_lookup() {
         let (status, _, _) = response_body_string(res).await;
         assert_eq!(status, expected, "route {uri}");
     }
+    // Management routes fail closed at the application boundary even though
+    // no slug lookup is involved: direct access without the proxy token is
+    // rejected before any handler runs.
+    let req = axum::http::Request::builder()
+        .uri("/admin")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    let (status, _, _) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     // Reserved slugs cannot be created via the domain layer.
     let base: url::Url = "http://localhost".parse().unwrap();
     for reserved in ["admin", "api", "health", "static", "assets"] {
