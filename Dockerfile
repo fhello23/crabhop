@@ -10,6 +10,8 @@ RUN cargo build --release --locked
 
 # ---- Runtime ----
 FROM debian:bookworm-slim
+LABEL org.opencontainers.image.title="crabhop" \
+      org.opencontainers.image.description="Private Rust link shortener"
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates wget sqlite3 \
   && rm -rf /var/lib/apt/lists/* \
