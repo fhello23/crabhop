@@ -9,7 +9,7 @@ dbs:
     replicas:
       - type: s3
         bucket: "${LITESTREAM_BUCKET}"
-        path: go-fhola
+        path: shortener
         endpoint: "${LITESTREAM_ENDPOINT}"
         # Credentials via environment: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
         sync-interval: 10s

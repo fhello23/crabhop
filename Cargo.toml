@@ -2,7 +2,7 @@
 name = "shortener"
 version = "0.1.0"
 edition = "2021"
-description = "go.fhola.com — single-administrator link shortener (Axum + SQLite)"
+description = "Single-administrator link shortener (Axum + SQLite)"
 license = "MIT"
 
 [[bin]]

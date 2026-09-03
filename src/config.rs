@@ -140,8 +140,8 @@ mod tests {
     fn origin_includes_non_default_port() {
         let u: Url = "http://127.0.0.1:45231".parse().unwrap();
         assert_eq!(origin_of(&u), "http://127.0.0.1:45231");
-        let u: Url = "https://go.fhola.com".parse().unwrap();
-        assert_eq!(origin_of(&u), "https://go.fhola.com");
+        let u: Url = "https://go.example.com".parse().unwrap();
+        assert_eq!(origin_of(&u), "https://go.example.com");
     }
 
     #[test]

@@ -172,7 +172,7 @@ mod tests {
     use super::*;
 
     fn base() -> Url {
-        "https://go.fhola.com".parse().unwrap()
+        "https://go.example.com".parse().unwrap()
     }
 
     #[test]
@@ -196,8 +196,8 @@ mod tests {
 
     #[test]
     fn rejects_self_loops() {
-        assert!(validate_target_url("https://go.fhola.com/example", &base()).is_err());
-        assert!(validate_target_url("https://go.fhola.com/", &base()).is_err());
+        assert!(validate_target_url("https://go.example.com/example", &base()).is_err());
+        assert!(validate_target_url("https://go.example.com/", &base()).is_err());
     }
 
     #[test]

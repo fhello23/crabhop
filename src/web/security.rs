@@ -233,19 +233,19 @@ mod tests {
     #[test]
     fn origin_checks() {
         let mut h = HeaderMap::new();
-        h.insert(header::ORIGIN, "https://go.fhola.com".parse().unwrap());
-        assert!(verify_origin(&h, "https://go.fhola.com"));
+        h.insert(header::ORIGIN, "https://go.example.com".parse().unwrap());
+        assert!(verify_origin(&h, "https://go.example.com"));
         h.insert(header::ORIGIN, "https://evil.com".parse().unwrap());
-        assert!(!verify_origin(&h, "https://go.fhola.com"));
+        assert!(!verify_origin(&h, "https://go.example.com"));
 
         let mut h2 = HeaderMap::new();
         h2.insert(
             header::REFERER,
-            "https://go.fhola.com/admin".parse().unwrap(),
+            "https://go.example.com/admin".parse().unwrap(),
         );
-        assert!(verify_origin(&h2, "https://go.fhola.com"));
+        assert!(verify_origin(&h2, "https://go.example.com"));
 
         let empty = HeaderMap::new();
-        assert!(!verify_origin(&empty, "https://go.fhola.com"));
+        assert!(!verify_origin(&empty, "https://go.example.com"));
     }
 }

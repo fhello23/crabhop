@@ -6,11 +6,12 @@ use crate::db::links::get_link;
 use crate::error::AppError;
 use crate::state::{now_millis, AppState};
 
-pub async fn landing() -> Html<&'static str> {
-    Html(
-        "<!doctype html><html><head><title>go.fhola.com</title></head>\
-         <body><h1>go.fhola.com</h1><p>Private link shortener.</p></body></html>",
-    )
+pub async fn landing(State(state): State<AppState>) -> Html<String> {
+    let host = state.config.base_url.host_str().unwrap_or("shortener");
+    Html(format!(
+        "<!doctype html><html><head><title>{host}</title></head>\
+         <body><h1>{host}</h1><p>Private link shortener.</p></body></html>"
+    ))
 }
 
 pub async fn robots_txt() -> impl IntoResponse {

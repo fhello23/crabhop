@@ -1,4 +1,4 @@
-go.fhola.com {
+{$SITE_ADDRESS} {
 	@management path /admin /admin/* /api /api/*
 
 	basic_auth @management argon2id {

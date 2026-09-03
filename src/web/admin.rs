@@ -28,6 +28,7 @@ use crate::web::security::{
 #[allow(dead_code)]
 struct LinksTemplate {
     title: String,
+    brand_host: String,
     csrf_token: String,
     created_slug: Option<String>,
     created_short_url: Option<String>,
@@ -58,6 +59,7 @@ struct LinkRow {
 #[template(path = "edit_link.html")]
 struct EditTemplate {
     title: String,
+    brand_host: String,
     csrf_token: String,
     slug: String,
     short_url: String,
@@ -161,6 +163,17 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+/// Display host for the admin UI chrome, derived from BASE_URL at runtime
+/// so no domain is hardcoded in templates.
+fn brand_host(state: &AppState) -> String {
+    state
+        .config
+        .base_url
+        .host_str()
+        .unwrap_or("shortener")
+        .to_string()
 }
 
 fn to_row(state: &AppState, link: Link, now: i64) -> LinkRow {
@@ -267,6 +280,7 @@ pub async fn admin_list_with_created(
             let total_pages = ((result.total as f64) / (per_page as f64)).ceil() as u32;
             let tpl = LinksTemplate {
                 title: "Admin — Links".to_string(),
+                brand_host: brand_host(&state),
                 csrf_token,
                 created_short_url: created_slug.as_ref().map(|s| state.short_url(s)),
                 created_slug,
@@ -335,6 +349,7 @@ async fn render_list_with_error(
     .unwrap_or_default();
     let tpl = LinksTemplate {
         title: "Admin — Links".to_string(),
+        brand_host: brand_host(state),
         csrf_token,
         created_slug: None,
         created_short_url: None,
@@ -437,6 +452,7 @@ pub async fn admin_edit_form(
         Ok(link) => {
             let tpl = EditTemplate {
                 title: format!("Edit {}", link.slug),
+                brand_host: brand_host(&state),
                 csrf_token,
                 short_url: state.short_url(&link.slug),
                 slug: link.slug.clone(),
@@ -549,6 +565,7 @@ async fn render_edit_with_error(
         Ok(link) => {
             let tpl = EditTemplate {
                 title: format!("Edit {}", link.slug),
+                brand_host: brand_host(state),
                 csrf_token,
                 short_url: state.short_url(&link.slug),
                 slug: link.slug.clone(),

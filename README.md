@@ -1,18 +1,8 @@
-# `go.fhola.com` Link Shortener
+# `go.example.com` Link Shortener
 
 Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy.
 Implements `plan.md` MVP: public redirects, browser admin UI, protected JSON API,
 Docker packaging, and off-machine backup runbook.
-
-## Decisions (Milestone 0)
-
-- **Binary/crate name:** `shortener` (`shortener` binary + library for tests).
-- **Deployment target:** single Linux VPS (e.g. Ubuntu 24.04) with Docker + Compose plugin.
-- **Caddy placement (initial):** same Compose project as the app (`compose.yml`).
-  When more apps share the host, move Caddy to a server-level `infra` project on a
-  shared external network; only Caddy publishes 80/443 either way.
-- **Backups:** Litestream to S3-compatible storage (see `litestream.yml.example`
-  + “Backups & restore” below). Fallback: scheduled `sqlite3 .backup` + `rclone`.
 
 ## Quickstart (local)
 
@@ -49,10 +39,11 @@ cargo run
 |---|---|---|
 | `APP_ENV` | no (default `development`) | `production` |
 | `APP_BIND` | no (default `0.0.0.0:3000`) | `0.0.0.0:3000` |
-| `BASE_URL` | yes | `https://go.fhola.com` |
+| `BASE_URL` | yes | `https://go.example.com` |
 | `DATABASE_URL` | yes | `sqlite:///data/go.db` |
 | `RUST_LOG` | no | `info` |
 | `CSRF_SIGNING_KEY` | yes (≥32 bytes) | `openssl rand -base64 48` |
+| `SITE_ADDRESS` | yes (Caddy only) | your public domain |
 | `ADMIN_PASSWORD_HASH` | yes (Caddy only) | Argon2id hash from `caddy hash-password` |
 
 Rules: production refuses non-HTTPS `BASE_URL` and short/missing CSRF keys.
@@ -102,15 +93,16 @@ also accept `datetime-local` (`YYYY-MM-DDTHH:MM`, UTC).
 
 1. Provision Ubuntu 24.04, apply updates, install Docker + Compose plugin.
 2. Firewall: allow 22/80/443 only (`ufw allow 22,80,443/tcp`), restrict SSH (keys only).
-3. DNS: `go.fhola.com A → <host IP>`.
+3. DNS: `<your-domain> A → <host IP>`.
 4. On server, create restricted `.env` (mode 600): `APP_ENV=production`,
-   `BASE_URL=https://go.fhola.com`, `DATABASE_URL=sqlite:///data/go.db`,
+   `BASE_URL=https://<your-domain>`, `SITE_ADDRESS=<your-domain>`,
+   `DATABASE_URL=sqlite:///data/go.db`,
    `CSRF_SIGNING_KEY` (48 random bytes), `ADMIN_PASSWORD_HASH`
    (`docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext '…'`).
    Because argon2id hashes contain `$`, write each one as `$$` in `.env`
    (Compose interpolates unescaped `$VAR` and would corrupt the hash —
    verified during local stack testing).
-5. `docker compose up -d --build`; verify: `https://go.fhola.com/health/live`,
+5. `docker compose up -d --build`; verify: `https://<your-domain>/health/live`,
    HTTP→HTTPS redirect, `/admin` prompts for password, app port not reachable
    externally (`ss -tlnp` shows only 80/443).
 6. Throttling: add Caddy `rate_limit` or host `fail2ban` for `/admin* /api*`.
