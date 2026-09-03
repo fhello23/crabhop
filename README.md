@@ -1,8 +1,14 @@
 # Crabhop
 
-Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy
-Features: public redirects, browser admin UI, protected JSON API,
-Docker packaging, and off-machine backup runbook.
+Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy.
+
+Features:
+
+- Public redirects with correct status codes and cache headers.
+- Browser admin UI for creating and managing links.
+- Protected JSON API for scripts and future integrations.
+- Docker packaging with automatic TLS and edge authentication.
+- Documented off-machine backup and restore runbook.
 
 ## Quickstart (local)
 
