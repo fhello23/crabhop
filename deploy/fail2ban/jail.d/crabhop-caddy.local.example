@@ -4,10 +4,15 @@ filter = crabhop-caddy
 # Replace this with the Mountpoint printed by:
 # docker volume inspect crabhop_caddy-logs --format '{{ .Mountpoint }}'
 logpath = /var/lib/docker/volumes/crabhop_caddy-logs/_data/access.log
-backend = auto
+# Docker's "local" log driver means these lines never reach the journald;
+# 'auto' would pick the systemd backend here and watch nothing. Force polling.
+backend = polling
 port = http,https
 # Published Docker ports traverse FORWARD; insert the ban in Docker's user chain.
 chain = DOCKER-USER
 maxretry = 5
 findtime = 10m
 bantime = 1h
+# Real client IPs arrive via X-Forwarded-For (Caddy trusted_proxies). If proxy
+# trust ever breaks, client_ip degrades to the docker gateway — never ban it.
+ignoreip = 127.0.0.1/8 172.16.0.0/12 10.0.0.0/8 192.168.0.0/16
