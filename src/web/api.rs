@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -27,7 +29,8 @@ pub struct LinkResponse {
     pub updated_at: String,
     pub expires_at: Option<String>,
     pub disabled: bool,
-    pub total_clicks: i64,
+    /// Null means statistics could not be loaded; zero means no recorded clicks.
+    pub total_clicks: Option<i64>,
     pub last_clicked_at: Option<String>,
 }
 
@@ -132,7 +135,7 @@ where
 fn to_response(
     state: &AppState,
     link: &Link,
-    total_clicks: i64,
+    total_clicks: Option<i64>,
     last_clicked_at: Option<String>,
 ) -> LinkResponse {
     LinkResponse {
@@ -149,11 +152,16 @@ fn to_response(
     }
 }
 
-/// Attach click aggregates to a single link. Additive: a stats failure is an
-/// honest 500 rather than silently reporting zeros.
-async fn enrich(state: &AppState, link: &Link) -> Result<LinkResponse, AppError> {
-    let (total, last) = link_stats(&state.db, &link.id).await?;
-    Ok(to_response(state, link, total, last.map(millis_to_rfc3339)))
+/// Optional statistics must not change the outcome of a committed mutation.
+/// Bound the lookup and report unavailable data explicitly rather than zero.
+async fn enrich(state: &AppState, link: &Link) -> LinkResponse {
+    match tokio::time::timeout(Duration::from_millis(100), link_stats(&state.db, &link.id)).await {
+        Ok(Ok((total, last))) => to_response(state, link, Some(total), last.map(millis_to_rfc3339)),
+        _ => {
+            tracing::warn!("link statistics unavailable");
+            to_response(state, link, None, None)
+        }
+    }
 }
 
 fn json_error(e: AppError) -> Response {
@@ -214,7 +222,7 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
                     to_response(
                         &state,
                         &item.link,
-                        item.total_clicks,
+                        Some(item.total_clicks),
                         item.last_clicked_at.map(millis_to_rfc3339),
                     )
                 })
@@ -233,10 +241,7 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
 
 pub async fn api_get(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
     match get_link(&state.db, &slug).await {
-        Ok(link) => match enrich(&state, &link).await {
-            Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
-            Err(e) => json_error(e),
-        },
+        Ok(link) => (StatusCode::OK, axum::Json(enrich(&state, &link).await)).into_response(),
         Err(e) => json_error(e),
     }
 }
@@ -264,15 +269,14 @@ pub async fn api_create(
         expires_at,
     };
     match create_link(&state.db, &state.config.base_url, input).await {
-        Ok(link) => match enrich(&state, &link).await {
-            Ok(body) => (
-                StatusCode::CREATED,
-                [(header::LOCATION, state.short_url(&link.slug))],
-                axum::Json(body),
-            )
-                .into_response(),
-            Err(e) => json_error(e),
-        },
+        // A newly created link has no recorded clicks at creation time.
+        // Do not add a fallible statistics lookup after the insert commits.
+        Ok(link) => (
+            StatusCode::CREATED,
+            [(header::LOCATION, state.short_url(&link.slug))],
+            axum::Json(to_response(&state, &link, Some(0), None)),
+        )
+            .into_response(),
         Err(e) => json_error(e),
     }
 }
@@ -317,10 +321,7 @@ pub async fn api_patch(
         ));
     }
     match update_link(&state.db, &state.config.base_url, &slug, input).await {
-        Ok(link) => match enrich(&state, &link).await {
-            Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
-            Err(e) => json_error(e),
-        },
+        Ok(link) => (StatusCode::OK, axum::Json(enrich(&state, &link).await)).into_response(),
         Err(e) => json_error(e),
     }
 }
@@ -350,10 +351,7 @@ pub async fn api_enable(
         return json_error(e);
     }
     match set_disabled(&state.db, &slug, false).await {
-        Ok(link) => match enrich(&state, &link).await {
-            Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
-            Err(e) => json_error(e),
-        },
+        Ok(link) => (StatusCode::OK, axum::Json(enrich(&state, &link).await)).into_response(),
         Err(e) => json_error(e),
     }
 }

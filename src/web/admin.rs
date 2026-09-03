@@ -88,6 +88,8 @@ struct EditTemplate {
 struct ChartBar {
     height_pct: u8,
     label: String,
+    date: String,
+    click_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +331,8 @@ fn chart_bars(daily: &[DailyClickPoint]) -> Vec<ChartBar> {
             ChartBar {
                 height_pct,
                 label: day_click_label(d.day_start_utc, d.click_count),
+                date: millis_to_rfc3339(d.day_start_utc)[..10].to_string(),
+                click_count: d.click_count,
             }
         })
         .collect()

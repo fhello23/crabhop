@@ -41,6 +41,20 @@ async fn same_day_clicks_share_one_aggregate_row() {
 }
 
 #[tokio::test]
+async fn out_of_order_writes_preserve_the_latest_click() {
+    let app = setup().await;
+    let id = test_link(&app.state, "outoforder").await;
+    let latest = MIDNIGHT + 3_600_000;
+    for timestamp in [latest, MIDNIGHT + 1_000, latest - 1] {
+        record_click(&app.state.db, &id, timestamp).await.unwrap();
+    }
+    assert_eq!(
+        link_stats(&app.state.db, &id).await.unwrap(),
+        (3, Some(latest))
+    );
+}
+
+#[tokio::test]
 async fn clicks_across_utc_midnight_split_into_two_rows() {
     let app = setup().await;
     let id = test_link(&app.state, "boundary").await;
@@ -126,6 +140,7 @@ async fn get_status(
 }
 
 async fn total_clicks(app: &common::TestApp, slug: &str) -> i64 {
+    app.state.analytics.flush().await.unwrap();
     let link = shortener::db::links::get_link(&app.state.db, slug)
         .await
         .unwrap();
@@ -218,10 +233,88 @@ async fn analytics_failure_leaves_redirects_functional() {
         headers.get(axum::http::header::LOCATION).unwrap(),
         "https://example.com/resilient"
     );
+    app.state.analytics.flush().await.unwrap();
+}
+
+#[tokio::test]
+async fn locked_analytics_writer_does_not_delay_redirects() {
+    use shortener::config::Config;
+    use shortener::state::{connect_db, AppState};
+    use sqlx::Connection;
+    use std::time::Duration;
+
+    // File-backed WAL is essential here: the in-memory fixtures do not
+    // exercise the production reader/writer locking behavior.
+    struct DatabaseFile(std::path::PathBuf);
+    impl Drop for DatabaseFile {
+        fn drop(&mut self) {
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+            }
+        }
+    }
+    let file = DatabaseFile(
+        std::env::temp_dir().join(format!("crabhop-lock-{}.db", uuid::Uuid::new_v4())),
+    );
+    let url = format!("sqlite://{}?mode=rwc", file.0.display());
+    let db = connect_db(&url).await.unwrap();
+    let config = Config::for_tests(
+        common::TEST_BASE_URL,
+        &url,
+        common::TEST_CSRF_KEY,
+        common::TEST_PROXY_TOKEN,
+        false,
+    );
+    let state = AppState::new(db, config);
+    common::create_link(&state, Some("locked"), "https://example.com/locked", None).await;
+    let router = shortener::web::app_router(state.clone());
+    let mut blocker = sqlx::SqliteConnection::connect_with(&state.db.connect_options())
+        .await
+        .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+        .execute(&mut blocker)
+        .await
+        .unwrap();
+
+    let response_codes = tokio::time::timeout(Duration::from_secs(2), async {
+        let mut requests = tokio::task::JoinSet::new();
+        for _ in 0..32 {
+            let app = router.clone();
+            requests.spawn(async move {
+                let request = axum::http::Request::builder()
+                    .uri("/locked")
+                    .body(axum::body::Body::empty())
+                    .unwrap();
+                app.oneshot(request).await.unwrap().status()
+            });
+        }
+        let mut codes = Vec::new();
+        while let Some(result) = requests.join_next().await {
+            codes.push(result.unwrap());
+        }
+        codes
+    })
+    .await;
+
+    // Always release the lock before assertions/cleanup, including failures.
+    sqlx::query("ROLLBACK").execute(&mut blocker).await.unwrap();
+    blocker.close().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), state.analytics.flush())
+        .await
+        .unwrap()
+        .unwrap();
+    state.db.close().await;
+    let codes = response_codes.expect("redirects must not wait for the analytics writer lock");
+    assert_eq!(codes.len(), 32);
+    assert!(
+        codes.iter().all(|&status| status == StatusCode::FOUND),
+        "{codes:?}"
+    );
 }
 
 async fn get_edit_page(app: &common::TestApp, slug: &str) -> (StatusCode, String) {
     use tower::ServiceExt;
+    app.state.analytics.flush().await.unwrap();
     let req = common::with_proxy_token(
         axum::http::Request::builder().uri(format!("/admin/links/{slug}")),
     )
@@ -247,6 +340,9 @@ async fn activity_card_shows_empty_state() {
     assert!(body.contains("Never"), "unclicked link should show Never");
     assert!(body.contains("0</strong> total clicks"), "body: {body}");
     assert_eq!(count_bars(&body), 30, "chart always renders 30 bars");
+    assert!(body.contains("<summary>View daily click counts</summary>"));
+    assert!(body.contains("<caption>Daily clicks for the last 30 days</caption>"));
+    assert_eq!(body.matches("<th scope=\"row\">").count(), 30);
 }
 
 #[tokio::test]
@@ -268,6 +364,10 @@ async fn activity_card_shows_populated_state() {
     // bucket it also renders at full height.
     assert!(body.contains(": 3 clicks"), "today's bar label missing");
     assert!(body.contains("--h: 100%"), "full-height bar missing");
+    assert!(
+        body.contains("<td class=\"num\">3</td>"),
+        "daily values must be text, not just tooltips"
+    );
 }
 
 #[tokio::test]
@@ -311,6 +411,7 @@ async fn api_link_responses_carry_click_fields() {
         let (status, _, _) = get_status(&app, "GET", "/apiclicks").await;
         assert_eq!(status, StatusCode::FOUND);
     }
+    app.state.analytics.flush().await.unwrap();
     let res = app
         .router
         .clone()

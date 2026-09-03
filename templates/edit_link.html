@@ -34,11 +34,23 @@
 <section class="card">
   <h2>Activity</h2>
   <p><strong>{{ activity_total }}</strong> total clicks · <strong>{{ activity_7d }}</strong> in the last 7 days · Last clicked: {{ activity_last }}</p>
-  <div class="chart" role="img" aria-label="Daily clicks for the last 30 days">
+  <div class="chart" aria-hidden="true">
     {% for b in chart_bars %}
-    <div class="bar" style="--h: {{ b.height_pct }}%" title="{{ b.label }}" aria-label="{{ b.label }}"></div>
+    <div class="bar" style="--h: {{ b.height_pct }}%" title="{{ b.label }}"></div>
     {% endfor %}
   </div>
+  <details class="activity-data">
+    <summary>View daily click counts</summary>
+    <table>
+      <caption>Daily clicks for the last 30 days</caption>
+      <thead><tr><th scope="col">Date (UTC)</th><th scope="col">Clicks</th></tr></thead>
+      <tbody>
+        {% for b in chart_bars %}
+        <tr><th scope="row">{{ b.date }}</th><td class="num">{{ b.click_count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
   <p class="muted"><small>Successful public GET redirects only, aggregated per UTC day. No visitor data is stored.</small></p>
 </section>
 

@@ -39,7 +39,7 @@ async fn setup_with_direct(allow_direct: bool) -> TestApp {
     let db = connect_db(&config.database_url)
         .await
         .expect("test database connects and migrates");
-    let state = AppState { db, config };
+    let state = AppState::new(db, config);
     let router = app_router(state.clone());
     TestApp { router, state }
 }

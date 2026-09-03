@@ -5,11 +5,84 @@
 //! stored. Counts are best-effort operational analytics: recording failures
 //! never block a redirect.
 
-use sqlx::SqlitePool;
+use std::time::Duration;
+
+use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::error::AppError;
 
 pub const MILLIS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+
+const CLICK_QUEUE_CAPACITY: usize = 1024;
+
+#[derive(Debug)]
+enum ClickMessage {
+    Click { link_id: String, timestamp: i64 },
+    Flush(oneshot::Sender<()>),
+}
+
+/// A bounded, best-effort writer isolated from the request connection pool.
+/// Redirects only try to enqueue; they never wait for a connection or a lock.
+#[derive(Debug, Clone)]
+pub struct ClickRecorder {
+    sender: mpsc::Sender<ClickMessage>,
+}
+
+impl ClickRecorder {
+    pub fn start(db: &SqlitePool) -> Self {
+        // Clone the actual options to preserve named in-memory databases in
+        // tests as well as production file paths. Never borrow a request
+        // connection: even a stalled writer must leave lookups available.
+        let options = db
+            .connect_options()
+            .as_ref()
+            .clone()
+            .busy_timeout(Duration::from_millis(50));
+        let writer = SqlitePoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(100))
+            .connect_lazy_with(options);
+        let (sender, mut receiver) = mpsc::channel(CLICK_QUEUE_CAPACITY);
+        tokio::spawn(async move {
+            while let Some(message) = receiver.recv().await {
+                match message {
+                    ClickMessage::Click { link_id, timestamp } => {
+                        if record_click(&writer, &link_id, timestamp).await.is_err() {
+                            tracing::warn!("failed to record redirect analytics");
+                        }
+                    }
+                    ClickMessage::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                }
+            }
+            writer.close().await;
+        });
+        Self { sender }
+    }
+
+    /// Returns false when the queue is full or the worker is unavailable.
+    /// Dropping a metric is preferable to delaying a public redirect.
+    pub fn try_record(&self, link_id: String, timestamp: i64) -> bool {
+        self.sender
+            .try_send(ClickMessage::Click { link_id, timestamp })
+            .is_ok()
+    }
+
+    /// Wait for previously accepted clicks to be attempted. Only shutdown
+    /// and tests use this barrier; request handlers must never call it.
+    pub async fn flush(&self) -> anyhow::Result<()> {
+        let (done, finished) = oneshot::channel();
+        self.sender
+            .send(ClickMessage::Flush(done))
+            .await
+            .map_err(|_| anyhow::anyhow!("analytics worker stopped"))?;
+        finished
+            .await
+            .map_err(|_| anyhow::anyhow!("analytics worker stopped"))
+    }
+}
 
 /// Start of the UTC day containing `timestamp` (Unix millis).
 pub fn day_start_utc(timestamp: i64) -> i64 {
@@ -64,7 +137,7 @@ pub async fn record_click(
          VALUES (?, ?, 1, ?)
          ON CONFLICT(link_id, day_start_utc) DO UPDATE SET
              click_count = click_count + 1,
-             last_clicked_at = excluded.last_clicked_at",
+             last_clicked_at = MAX(last_clicked_at, excluded.last_clicked_at)",
     )
     .bind(link_id)
     .bind(day)
@@ -76,18 +149,14 @@ pub async fn record_click(
 
 /// Total clicks and last-clicked time for a single link.
 pub async fn link_stats(pool: &SqlitePool, link_id: &str) -> Result<(i64, Option<i64>), AppError> {
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(click_count), 0) FROM link_daily_clicks WHERE link_id = ?",
+    let stats = sqlx::query_as(
+        "SELECT COALESCE(SUM(click_count), 0), MAX(last_clicked_at)
+         FROM link_daily_clicks WHERE link_id = ?",
     )
     .bind(link_id)
     .fetch_one(pool)
     .await?;
-    let last: Option<i64> =
-        sqlx::query_scalar("SELECT MAX(last_clicked_at) FROM link_daily_clicks WHERE link_id = ?")
-            .bind(link_id)
-            .fetch_one(pool)
-            .await?;
-    Ok((total, last))
+    Ok(stats)
 }
 
 /// Activity summary with a zero-filled daily series. `days` counts UTC
@@ -150,4 +219,19 @@ pub async fn get_link_activity(
         last_clicked_at,
         daily,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_or_closed_queue_drops_clicks_without_waiting() {
+        let (sender, receiver) = mpsc::channel(1);
+        let recorder = ClickRecorder { sender };
+        assert!(recorder.try_record("first".to_string(), 1));
+        assert!(!recorder.try_record("overflow".to_string(), 2));
+        drop(receiver);
+        assert!(!recorder.try_record("closed".to_string(), 3));
+    }
 }

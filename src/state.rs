@@ -6,14 +6,25 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::db::analytics::ClickRecorder;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub db: SqlitePool,
     pub config: Arc<Config>,
+    pub analytics: ClickRecorder,
 }
 
 impl AppState {
+    pub fn new(db: SqlitePool, config: Arc<Config>) -> Self {
+        let analytics = ClickRecorder::start(&db);
+        Self {
+            db,
+            config,
+            analytics,
+        }
+    }
+
     pub fn short_url(&self, slug: &str) -> String {
         let base = self.config.base_url.as_str().trim_end_matches('/');
         format!("{base}/{slug}")

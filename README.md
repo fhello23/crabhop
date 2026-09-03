@@ -112,13 +112,21 @@ and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
   series. No IP addresses, referrers, or user agents are stored.
 - The admin list shows per-link totals with `All / Active / Expired /
   Disabled` filters and a `Most clicked` sort; each link's edit page shows
-  the activity card with a 30-day chart.
+  the activity card with a 30-day chart and an expandable daily-value table
+  that works with a keyboard or screen reader.
 - The JSON API returns additive `total_clicks` and `last_clicked_at` fields,
   and the list endpoint accepts `status` and `sort` with the same values as
   the admin UI. There is no daily-series endpoint yet.
-- Counts are best-effort operational analytics: a failed analytics write
-  logs a generic warning and the redirect still succeeds, so totals may
-  undercount during database contention. Never treat them as exact.
+  A single-link response reports `total_clicks: null` and
+  `last_clicked_at: null` when statistics cannot load. Committed creates,
+  updates, and enables still return success; a new link reports zero clicks
+  at creation time.
+- Recording runs in a bounded background queue with its own SQLite
+  connection, so redirects never wait for analytics writes. Counts may lag
+  briefly after a redirect. A full queue or failed write drops the metric
+  and logs a generic warning. Shutdown allows up to two seconds to drain
+  accepted clicks; abrupt shutdown can lose pending metrics. These are
+  best-effort operational counts and should never be treated as exact.
 
 ## Security model
 

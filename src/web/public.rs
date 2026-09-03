@@ -2,7 +2,6 @@ use axum::extract::State;
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 
-use crate::db::analytics::record_click;
 use crate::db::links::get_link;
 use crate::error::AppError;
 use crate::state::{now_millis, AppState};
@@ -68,13 +67,9 @@ pub async fn redirect_slug(
     match resolve_redirect(&state, &slug).await {
         Ok(resolved) => {
             if method == Method::GET {
-                // Best-effort analytics: a recording failure must never
-                // break the redirect itself.
-                if record_click(&state.db, &resolved.link_id, now_millis())
-                    .await
-                    .is_err()
-                {
-                    tracing::warn!("failed to record redirect analytics");
+                // Never wait on analytics I/O or consume a request connection.
+                if !state.analytics.try_record(resolved.link_id, now_millis()) {
+                    tracing::warn!("redirect analytics queue unavailable; dropping click");
                 }
             }
             let mut resp = (

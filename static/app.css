@@ -36,5 +36,10 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .chart { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding: 8px 4px 0; border-bottom: 1px solid var(--line); }
 .chart .bar { flex: 1; min-width: 3px; background: var(--accent); border-radius: 2px 2px 0 0; height: var(--h); }
+.activity-data { margin-top: 12px; }
+.activity-data summary { cursor: pointer; color: var(--accent); }
+.activity-data summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.activity-data table { margin-top: 12px; }
+.activity-data caption { text-align: left; color: var(--muted); }
 .short-url-row { display: flex; gap: 8px; margin-top: 8px; }
 .footer { margin: 32px auto; }

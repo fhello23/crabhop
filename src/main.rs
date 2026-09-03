@@ -21,16 +21,21 @@ async fn main() -> anyhow::Result<()> {
         "shortener starting"
     );
 
-    let state = AppState {
-        db: db.clone(),
-        config: Arc::clone(&config),
-    };
+    let state = AppState::new(db, Arc::clone(&config));
+    let analytics = state.analytics.clone();
     let app = app_router(state);
 
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    // Give accepted metrics a bounded chance to drain after requests stop.
+    if !matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), analytics.flush()).await,
+        Ok(Ok(()))
+    ) {
+        tracing::warn!("analytics did not finish draining before shutdown");
+    }
     tracing::info!("shortener stopped");
     Ok(())
 }

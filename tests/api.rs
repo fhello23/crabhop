@@ -25,6 +25,93 @@ fn api_req(
 }
 
 #[tokio::test]
+async fn committed_mutations_succeed_when_analytics_is_unavailable() {
+    let app = setup().await;
+    sqlx::query("DROP TABLE link_daily_clicks")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req(
+            "POST",
+            "/api/v1/links",
+            Some(r#"{"target_url":"https://example.com/before","custom_slug":"statsfailure"}"#),
+            true,
+        ))
+        .await
+        .unwrap();
+    let (status, headers, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert!(headers.contains_key(header::LOCATION));
+    let created: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(created["total_clicks"], 0);
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req(
+            "PATCH",
+            "/api/v1/links/statsfailure",
+            Some(r#"{"target_url":"https://example.com/after"}"#),
+            true,
+        ))
+        .await
+        .unwrap();
+    let (status, _, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let updated: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(updated["target_url"], "https://example.com/after");
+    assert!(
+        updated["total_clicks"].is_null(),
+        "unavailable counts must not pretend to be zero"
+    );
+    assert!(updated["last_clicked_at"].is_null());
+
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req("DELETE", "/api/v1/links/statsfailure", None, true))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req(
+            "POST",
+            "/api/v1/links/statsfailure/enable",
+            None,
+            true,
+        ))
+        .await
+        .unwrap();
+    let (status, _, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let enabled: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(enabled["disabled"], false);
+    assert!(enabled["total_clicks"].is_null());
+
+    let persisted = shortener::db::links::get_link(&app.state.db, "statsfailure")
+        .await
+        .unwrap();
+    assert_eq!(persisted.target_url, "https://example.com/after");
+    assert!(!persisted.is_disabled());
+    let res = app
+        .router
+        .clone()
+        .oneshot(api_req("GET", "/api/v1/links/statsfailure", None, false))
+        .await
+        .unwrap();
+    let (status, _, body) = response_body_string(res).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let fetched: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(fetched["total_clicks"].is_null());
+}
+
+#[tokio::test]
 async fn api_full_lifecycle() {
     let app = setup().await;
 
