@@ -215,6 +215,7 @@ async fn admin_escapes_stored_values() {
     let (_, headers, _) = response_body_string(res).await;
     assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
     assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
+    assert_eq!(headers.get("Referrer-Policy").unwrap(), "same-origin");
     assert!(headers.contains_key("Content-Security-Policy"));
 
     // CSRF cookie attributes.

@@ -172,7 +172,7 @@ pub async fn security_headers_mw(
     if let Ok(v) = "DENY".parse() {
         headers.insert(header::X_FRAME_OPTIONS, v);
     }
-    if let Ok(v) = "no-referrer".parse() {
+    if let Ok(v) = "same-origin".parse() {
         headers.insert(header::REFERRER_POLICY, v);
     }
     if path.starts_with("/admin") {
