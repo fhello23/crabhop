@@ -3,6 +3,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::db::analytics::link_stats;
 use crate::db::links::{
     create_link, get_link, list_links, normalize_pagination, set_disabled, update_link, Link,
     LinkSort, ListParams, StatusFilter,
@@ -26,6 +27,8 @@ pub struct LinkResponse {
     pub updated_at: String,
     pub expires_at: Option<String>,
     pub disabled: bool,
+    pub total_clicks: i64,
+    pub last_clicked_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -50,6 +53,8 @@ pub struct ErrorDetail {
 #[derive(Debug, Deserialize)]
 pub struct ApiListQuery {
     pub q: Option<String>,
+    pub status: Option<String>,
+    pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
 }
@@ -124,7 +129,12 @@ where
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn to_response(state: &AppState, link: &Link) -> LinkResponse {
+fn to_response(
+    state: &AppState,
+    link: &Link,
+    total_clicks: i64,
+    last_clicked_at: Option<String>,
+) -> LinkResponse {
     LinkResponse {
         short_url: state.short_url(&link.slug),
         slug: link.slug.clone(),
@@ -134,7 +144,16 @@ fn to_response(state: &AppState, link: &Link) -> LinkResponse {
         updated_at: millis_to_rfc3339(link.updated_at),
         expires_at: link.expires_at.map(millis_to_rfc3339),
         disabled: link.is_disabled(),
+        total_clicks,
+        last_clicked_at,
     }
+}
+
+/// Attach click aggregates to a single link. Additive: a stats failure is an
+/// honest 500 rather than silently reporting zeros.
+async fn enrich(state: &AppState, link: &Link) -> Result<LinkResponse, AppError> {
+    let (total, last) = link_stats(&state.db, &link.id).await?;
+    Ok(to_response(state, link, total, last.map(millis_to_rfc3339)))
 }
 
 fn json_error(e: AppError) -> Response {
@@ -166,12 +185,20 @@ async fn read_json_body<T: serde::de::DeserializeOwned>(
 
 pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuery>) -> Response {
     let (page, per_page) = normalize_pagination(q.page, q.per_page);
+    let status = match StatusFilter::from_param(q.status.as_deref()) {
+        Ok(s) => s,
+        Err(e) => return json_error(e),
+    };
+    let sort = match LinkSort::from_param(q.sort.as_deref()) {
+        Ok(s) => s,
+        Err(e) => return json_error(e),
+    };
     match list_links(
         &state.db,
         ListParams {
             query: q.q.filter(|s| !s.trim().is_empty()),
-            status: StatusFilter::All,
-            sort: LinkSort::Newest,
+            status,
+            sort,
             page,
             per_page,
             now: now_millis(),
@@ -183,7 +210,14 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
             let data = result
                 .items
                 .iter()
-                .map(|item| to_response(&state, &item.link))
+                .map(|item| {
+                    to_response(
+                        &state,
+                        &item.link,
+                        item.total_clicks,
+                        item.last_clicked_at.map(millis_to_rfc3339),
+                    )
+                })
                 .collect();
             let body = ListResponse {
                 data,
@@ -199,7 +233,10 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
 
 pub async fn api_get(State(state): State<AppState>, Path(slug): Path<String>) -> Response {
     match get_link(&state.db, &slug).await {
-        Ok(link) => (StatusCode::OK, axum::Json(to_response(&state, &link))).into_response(),
+        Ok(link) => match enrich(&state, &link).await {
+            Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
+            Err(e) => json_error(e),
+        },
         Err(e) => json_error(e),
     }
 }
@@ -227,12 +264,15 @@ pub async fn api_create(
         expires_at,
     };
     match create_link(&state.db, &state.config.base_url, input).await {
-        Ok(link) => (
-            StatusCode::CREATED,
-            [(header::LOCATION, state.short_url(&link.slug))],
-            axum::Json(to_response(&state, &link)),
-        )
-            .into_response(),
+        Ok(link) => match enrich(&state, &link).await {
+            Ok(body) => (
+                StatusCode::CREATED,
+                [(header::LOCATION, state.short_url(&link.slug))],
+                axum::Json(body),
+            )
+                .into_response(),
+            Err(e) => json_error(e),
+        },
         Err(e) => json_error(e),
     }
 }
@@ -277,7 +317,10 @@ pub async fn api_patch(
         ));
     }
     match update_link(&state.db, &state.config.base_url, &slug, input).await {
-        Ok(link) => (StatusCode::OK, axum::Json(to_response(&state, &link))).into_response(),
+        Ok(link) => match enrich(&state, &link).await {
+            Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
+            Err(e) => json_error(e),
+        },
         Err(e) => json_error(e),
     }
 }
@@ -307,7 +350,10 @@ pub async fn api_enable(
         return json_error(e);
     }
     match set_disabled(&state.db, &slug, false).await {
-        Ok(link) => (StatusCode::OK, axum::Json(to_response(&state, &link))).into_response(),
+        Ok(link) => match enrich(&state, &link).await {
+            Ok(body) => (StatusCode::OK, axum::Json(body)).into_response(),
+            Err(e) => json_error(e),
+        },
         Err(e) => json_error(e),
     }
 }

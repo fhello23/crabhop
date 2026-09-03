@@ -7,6 +7,7 @@ Features:
 - Public redirects with correct status codes and cache headers.
 - Browser admin UI for creating and managing links.
 - Protected JSON API for scripts and future integrations.
+- Best-effort click analytics with daily UTC aggregates and no visitor data.
 - Docker packaging with automatic TLS and edge authentication.
 - Documented off-machine backup and restore runbook.
 
@@ -101,6 +102,23 @@ API errors are `{"error":{"message":"…","code":NNN}}`; `deny_unknown_fields` i
 `expires_at` must be in the future and accepts RFC 3339
 (`2026-12-31T23:59:59Z`) or Unix millis. Admin date fields are explicitly UTC
 and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
+
+### Link activity
+
+- Only successful public `GET` redirects are counted. `HEAD`, unknown,
+  disabled, and expired requests never increment a counter.
+- Storage is one row per link per UTC day (`link_daily_clicks`): total
+  clicks, last-7-days clicks, last-clicked time, and a zero-filled 30-day
+  series. No IP addresses, referrers, or user agents are stored.
+- The admin list shows per-link totals with `All / Active / Expired /
+  Disabled` filters and a `Most clicked` sort; each link's edit page shows
+  the activity card with a 30-day chart.
+- The JSON API returns additive `total_clicks` and `last_clicked_at` fields,
+  and the list endpoint accepts `status` and `sort` with the same values as
+  the admin UI. There is no daily-series endpoint yet.
+- Counts are best-effort operational analytics: a failed analytics write
+  logs a generic warning and the redirect still succeeds, so totals may
+  undercount during database contention. Never treat them as exact.
 
 ## Security model
 

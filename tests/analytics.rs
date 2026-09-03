@@ -219,3 +219,136 @@ async fn analytics_failure_leaves_redirects_functional() {
         "https://example.com/resilient"
     );
 }
+
+async fn get_edit_page(app: &common::TestApp, slug: &str) -> (StatusCode, String) {
+    use tower::ServiceExt;
+    let req = common::with_proxy_token(
+        axum::http::Request::builder().uri(format!("/admin/links/{slug}")),
+    )
+    .body(axum::body::Body::empty())
+    .unwrap();
+    let res = app.router.clone().oneshot(req).await.unwrap();
+    let (status, _, body) = common::response_body_string(res).await;
+    (status, body)
+}
+
+fn count_bars(html: &str) -> usize {
+    html.matches("class=\"bar\"").count()
+}
+
+#[tokio::test]
+async fn activity_card_shows_empty_state() {
+    let app = setup().await;
+    common::create_link(&app.state, Some("cardempty"), "https://example.com/e", None).await;
+
+    let (status, body) = get_edit_page(&app, "cardempty").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Activity"), "activity card missing");
+    assert!(body.contains("Never"), "unclicked link should show Never");
+    assert!(body.contains("0</strong> total clicks"), "body: {body}");
+    assert_eq!(count_bars(&body), 30, "chart always renders 30 bars");
+}
+
+#[tokio::test]
+async fn activity_card_shows_populated_state() {
+    let app = setup().await;
+    common::create_link(&app.state, Some("cardfull"), "https://example.com/f", None).await;
+
+    // Three real redirects land in today's UTC bucket together.
+    for _ in 0..3 {
+        let (status, _, _) = get_status(&app, "GET", "/cardfull").await;
+        assert_eq!(status, StatusCode::FOUND);
+    }
+
+    let (status, body) = get_edit_page(&app, "cardfull").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("3</strong> total clicks"), "body: {body}");
+    assert_eq!(count_bars(&body), 30);
+    // Today's bar carries an accessible per-day label; as the only nonzero
+    // bucket it also renders at full height.
+    assert!(body.contains(": 3 clicks"), "today's bar label missing");
+    assert!(body.contains("--h: 100%"), "full-height bar missing");
+}
+
+#[tokio::test]
+async fn api_link_responses_carry_click_fields() {
+    use tower::ServiceExt;
+    let app = setup().await;
+
+    let api = |method: &str, uri: &str, json: Option<String>| {
+        let mut b =
+            common::with_proxy_token(axum::http::Request::builder().method(method).uri(uri));
+        if json.is_some() {
+            b = b.header(axum::http::header::CONTENT_TYPE, "application/json");
+        }
+        b = b.header("X-Requested-With", "XMLHttpRequest");
+        let body = json.unwrap_or_default();
+        b.body(axum::body::Body::from(body)).unwrap()
+    };
+
+    // Create: fresh link reports zeros.
+    let res = app
+        .router
+        .clone()
+        .oneshot(api(
+            "POST",
+            "/api/v1/links",
+            Some(
+                r#"{"target_url":"https://example.com/apiclicks","custom_slug":"apiclicks"}"#
+                    .to_string(),
+            ),
+        ))
+        .await
+        .unwrap();
+    let (status, _, body) = common::response_body_string(res).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["total_clicks"], 0);
+    assert!(v["last_clicked_at"].is_null(), "{body}");
+
+    // Two public GETs flow into the API view.
+    for _ in 0..2 {
+        let (status, _, _) = get_status(&app, "GET", "/apiclicks").await;
+        assert_eq!(status, StatusCode::FOUND);
+    }
+    let res = app
+        .router
+        .clone()
+        .oneshot(api("GET", "/api/v1/links/apiclicks", None))
+        .await
+        .unwrap();
+    let (status, _, body) = common::response_body_string(res).await;
+    assert_eq!(status, StatusCode::OK);
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["total_clicks"], 2);
+    assert!(v["last_clicked_at"].is_string(), "{body}");
+
+    // List supports status/sort and carries the fields on every item.
+    let res = app
+        .router
+        .clone()
+        .oneshot(api("GET", "/api/v1/links?status=active&sort=clicked", None))
+        .await
+        .unwrap();
+    let (status, _, body) = common::response_body_string(res).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let items = v["data"].as_array().unwrap();
+    assert!(items.iter().any(|i| i["slug"] == "apiclicks"));
+    assert!(items.iter().all(|i| i.get("total_clicks").is_some()));
+    assert!(items.iter().all(|i| i.get("last_clicked_at").is_some()));
+
+    // Invalid values use the existing JSON validation-error shape.
+    for uri in ["/api/v1/links?status=bogus", "/api/v1/links?sort=bogus"] {
+        let res = app
+            .router
+            .clone()
+            .oneshot(api("GET", uri, None))
+            .await
+            .unwrap();
+        let (status, _, body) = common::response_body_string(res).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{uri}: {body}");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"]["message"].is_string(), "{body}");
+    }
+}

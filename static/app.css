@@ -34,5 +34,7 @@ th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); v
 form.inline { display: inline; margin: 0; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.chart { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding: 8px 4px 0; border-bottom: 1px solid var(--line); }
+.chart .bar { flex: 1; min-width: 3px; background: var(--accent); border-radius: 2px 2px 0 0; height: var(--h); }
 .short-url-row { display: flex; gap: 8px; margin-top: 8px; }
 .footer { margin: 32px auto; }

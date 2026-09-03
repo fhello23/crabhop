@@ -4,6 +4,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
+use crate::db::analytics::{get_link_activity, DailyClickPoint, LinkActivitySummary};
 use crate::db::links::{
     create_link, get_link, list_links, normalize_pagination, set_disabled, update_link,
     LinkListItem, LinkSort, ListParams, StatusFilter,
@@ -77,6 +78,16 @@ struct EditTemplate {
     updated_at: String,
     disabled: bool,
     error: Option<String>,
+    activity_total: i64,
+    activity_7d: i64,
+    activity_last: String,
+    chart_bars: Vec<ChartBar>,
+}
+
+#[derive(Debug, Clone)]
+struct ChartBar {
+    height_pct: u8,
+    label: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +311,38 @@ fn parse_admin_expires(raw: Option<&str>) -> Result<Option<i64>, AppError> {
     Err(AppError::Validation(
         "expires_at must be empty or a valid date/time (RFC 3339 or YYYY-MM-DDTHH:MM)".to_string(),
     ))
+}
+
+/// Build the 30-bar activity chart from a daily series. Heights normalize
+/// against the busiest day; nonzero bars get a small minimum height so
+/// single clicks stay visible. Labels are plain text for `title` use.
+fn chart_bars(daily: &[DailyClickPoint]) -> Vec<ChartBar> {
+    let max = daily.iter().map(|d| d.click_count).max().unwrap_or(0);
+    daily
+        .iter()
+        .map(|d| {
+            let height_pct = if d.click_count <= 0 || max <= 0 {
+                0
+            } else {
+                (((d.click_count as f64 / max as f64) * 100.0).round() as u8).clamp(8, 100)
+            };
+            ChartBar {
+                height_pct,
+                label: day_click_label(d.day_start_utc, d.click_count),
+            }
+        })
+        .collect()
+}
+
+fn day_click_label(day_start_utc: i64, count: i64) -> String {
+    let secs = day_start_utc.div_euclid(1000);
+    let dt =
+        time::OffsetDateTime::from_unix_timestamp(secs).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let fmt = time::format_description::parse_borrowed::<2>("[month repr:long] [day padding:none]")
+        .expect("valid format");
+    let day = dt.format(&fmt).unwrap_or_default();
+    let noun = if count == 1 { "click" } else { "clicks" };
+    format!("{day}: {count} {noun}")
 }
 
 fn format_datetime_local(millis: Option<i64>) -> String {
@@ -561,6 +604,10 @@ pub async fn admin_edit_form(
     let (csrf_token, set_cookie) = ensure_csrf_token(&headers, &state);
     match get_link(&state.db, &slug).await {
         Ok(link) => {
+            let activity = match get_link_activity(&state.db, &link.id, 30, now_millis()).await {
+                Ok(a) => a,
+                Err(e) => return html_error(e.status(), &e.public_message()),
+            };
             let tpl = EditTemplate {
                 title: format!("Edit {}", link.slug),
                 brand_host: brand_host(&state),
@@ -578,6 +625,13 @@ pub async fn admin_edit_form(
                 updated_at: millis_to_rfc3339(link.updated_at),
                 disabled: link.is_disabled(),
                 error: None,
+                activity_total: activity.total_clicks,
+                activity_7d: activity.last_7_days_clicks,
+                activity_last: activity
+                    .last_clicked_at
+                    .map(millis_to_rfc3339)
+                    .unwrap_or_else(|| "Never".to_string()),
+                chart_bars: chart_bars(&activity.daily),
             };
             render_with_cookie(tpl, set_cookie)
         }
@@ -674,6 +728,9 @@ async fn render_edit_with_error(
 ) -> Response {
     match get_link(&state.db, slug).await {
         Ok(link) => {
+            let activity = get_link_activity(&state.db, &link.id, 30, now_millis())
+                .await
+                .unwrap_or_else(|_| LinkActivitySummary::empty(30, now_millis()));
             let tpl = EditTemplate {
                 title: format!("Edit {}", link.slug),
                 brand_host: brand_host(state),
@@ -691,6 +748,13 @@ async fn render_edit_with_error(
                 updated_at: millis_to_rfc3339(link.updated_at),
                 disabled: link.is_disabled(),
                 error: Some(message),
+                activity_total: activity.total_clicks,
+                activity_7d: activity.last_7_days_clicks,
+                activity_last: activity
+                    .last_clicked_at
+                    .map(millis_to_rfc3339)
+                    .unwrap_or_else(|| "Never".to_string()),
+                chart_bars: chart_bars(&activity.daily),
             };
             match tpl.render() {
                 Ok(html) => {

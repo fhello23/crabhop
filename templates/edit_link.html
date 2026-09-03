@@ -32,6 +32,17 @@
 </section>
 
 <section class="card">
+  <h2>Activity</h2>
+  <p><strong>{{ activity_total }}</strong> total clicks · <strong>{{ activity_7d }}</strong> in the last 7 days · Last clicked: {{ activity_last }}</p>
+  <div class="chart" role="img" aria-label="Daily clicks for the last 30 days">
+    {% for b in chart_bars %}
+    <div class="bar" style="--h: {{ b.height_pct }}%" title="{{ b.label }}" aria-label="{{ b.label }}"></div>
+    {% endfor %}
+  </div>
+  <p class="muted"><small>Successful public GET redirects only, aggregated per UTC day. No visitor data is stored.</small></p>
+</section>
+
+<section class="card">
   <h2>Status</h2>
   {% if disabled %}
   <p><span class="pill off">disabled</span></p>

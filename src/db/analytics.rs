@@ -31,6 +31,27 @@ pub struct LinkActivitySummary {
     pub daily: Vec<DailyClickPoint>,
 }
 
+impl LinkActivitySummary {
+    /// Honest placeholder when activity cannot load on an already-erroring
+    /// page: all zeros, so the primary validation error stays visible.
+    pub fn empty(days: u32, timestamp: i64) -> Self {
+        let days = days.clamp(1, 366) as i64;
+        let today = day_start_utc(timestamp);
+        let start = today - (days - 1) * MILLIS_PER_DAY;
+        Self {
+            total_clicks: 0,
+            last_7_days_clicks: 0,
+            last_clicked_at: None,
+            daily: (0..days)
+                .map(|offset| DailyClickPoint {
+                    day_start_utc: start + offset * MILLIS_PER_DAY,
+                    click_count: 0,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// Record one click with a single atomic upsert.
 pub async fn record_click(
     pool: &SqlitePool,
