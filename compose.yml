@@ -1,0 +1,49 @@
+services:
+  shortener:
+    build: .
+    image: go-shortener:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_BIND: "0.0.0.0:3000"
+    volumes:
+      - app-data:/data
+    networks:
+      - internal
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/shortener-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    user: "10001"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    env_file:
+      - .env
+    networks:
+      - internal
+    depends_on:
+      shortener:
+        condition: service_healthy
+
+networks:
+  internal:
+
+volumes:
+  app-data:
+  caddy-data:
+  caddy-config:

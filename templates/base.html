@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <nav class="container nav">
+      <a class="brand" href="/admin">go.fhola.com</a>
+      <span class="muted">private link shortener</span>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="container footer muted">
+    <small>Authenticated via Caddy basic auth. All admin mutations are CSRF-protected.</small>
+  </footer>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

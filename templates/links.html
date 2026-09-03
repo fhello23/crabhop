@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Links</h1>
+
+{% if let Some(slug) = created_slug %}
+<div class="banner success" role="status">
+  <div>
+    <strong>Created:</strong>
+    <a href="/{{ slug }}">/{{ slug }}</a>
+    {% if let Some(url) = created_short_url %}
+    <div class="short-url-row">
+      <input id="created-url" type="text" readonly value="{{ url }}">
+      <button type="button" data-copy-target="created-url">Copy</button>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if let Some(msg) = error %}
+<div class="banner error" role="alert">{{ msg }}</div>
+{% endif %}
+
+<section class="card">
+  <h2>Create a link</h2>
+  <form method="post" action="/admin/links">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Destination URL (http/https)
+      <input type="url" name="target_url" required maxlength="4096" placeholder="https://example.com/a/long/path">
+    </label>
+    <div class="grid">
+      <label>Custom slug (optional, 3–64: a-z 0-9 _ -)
+        <input type="text" name="custom_slug" minlength="3" maxlength="64" placeholder="example">
+      </label>
+      <label>Expires (optional)
+        <input type="datetime-local" name="expires_at">
+      </label>
+    </div>
+    <label>Label (optional)
+      <input type="text" name="label" maxlength="256" placeholder="Quarterly report">
+    </label>
+    <button type="submit">Create short link</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Existing links</h2>
+  <form method="get" action="/admin" class="search-row">
+    <input type="search" name="q" value="{{ query }}" placeholder="Search slug, URL, label">
+    <button type="submit">Search</button>
+    {% if query != "" %}
+    <a class="button secondary" href="/admin">Clear</a>
+    {% endif %}
+  </form>
+
+  {% if links.is_empty() %}
+  <p class="muted">No links yet.</p>
+  {% else %}
+  <div class="table-wrap">
+  <table>
+    <thead>
+      <tr><th>Slug</th><th>Destination</th><th>Status</th><th>Updated</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for l in links %}
+      <tr>
+        <td><a href="/admin/links/{{ l.slug }}"><code>/{{ l.slug }}</code></a>
+          {% if let Some(lbl) = l.label %}<div class="muted"><small>{{ lbl }}</small></div>{% endif %}
+        </td>
+        <td class="truncate" title="{{ l.target_url }}">{{ l.target_url }}</td>
+        <td>
+          {% if l.disabled %}<span class="pill off">disabled</span>
+          {% else if l.expired %}<span class="pill expired">expired</span>
+          {% else %}<span class="pill on">active</span>{% endif %}
+          {% if let Some(e) = l.expires_at %}<div class="muted"><small>exp {{ e }}</small></div>{% endif %}
+        </td>
+        <td><small>{{ l.updated_at }}</small></td>
+        <td><a class="button secondary" href="/admin/links/{{ l.slug }}">Edit</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted"><small>Page {{ page }} of {{ total_pages }} — {{ total }} total.</small></p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,15 @@
+# Litestream example — replicate /data/go.db to S3-compatible storage.
+# Copy to litestream.yml on the host (NOT committed with secrets) and run
+# Litestream as a sidecar or host service per https://litestream.io.
+#
+# This file is an example only; bucket/credentials come from the environment.
+
+dbs:
+  - path: /data/go.db
+    replicas:
+      - type: s3
+        bucket: "${LITESTREAM_BUCKET}"
+        path: go-fhola
+        endpoint: "${LITESTREAM_ENDPOINT}"
+        # Credentials via environment: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+        sync-interval: 10s

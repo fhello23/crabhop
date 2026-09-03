@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/admin">&larr; Back to links</a></p>
+<h1>Edit <code>/{{ slug }}</code></h1>
+
+<p class="muted">Short URL:
+  <input id="short-url" type="text" readonly value="{{ short_url }}">
+  <button type="button" data-copy-target="short-url">Copy</button>
+</p>
+<p class="muted"><small>Created {{ created_at }} · Updated {{ updated_at }} · Expires {{ expires_display }}</small></p>
+
+{% if let Some(msg) = error %}
+<div class="banner error" role="alert">{{ msg }}</div>
+{% endif %}
+
+<section class="card">
+  <h2>Destination &amp; expiration</h2>
+  <p class="muted"><small>Slugs are immutable. To rename, create a new link and disable this one.</small></p>
+  <form method="post" action="/admin/links/{{ slug }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Destination URL (http/https)
+      <input type="url" name="target_url" required maxlength="4096" value="{{ target_url }}">
+    </label>
+    <label>Label (optional)
+      <input type="text" name="label" maxlength="256" value="{{ label }}">
+    </label>
+    <label>Expires (optional, empty = never)
+      <input type="datetime-local" name="expires_at" value="{{ expires_input }}">
+    </label>
+    <button type="submit">Save changes</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Status</h2>
+  {% if disabled %}
+  <p><span class="pill off">disabled</span></p>
+  <form method="post" action="/admin/links/{{ slug }}/enable">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit">Re-enable link</button>
+  </form>
+  {% else %}
+  <p><span class="pill on">enabled</span></p>
+  <form method="post" action="/admin/links/{{ slug }}/disable">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="danger">Disable link</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

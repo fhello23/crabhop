@@ -1,0 +1,158 @@
+# `go.fhola.com` Link Shortener
+
+Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy.
+Implements `plan.md` MVP: public redirects, browser admin UI, protected JSON API,
+Docker packaging, and off-machine backup runbook.
+
+## Decisions (Milestone 0)
+
+- **Binary/crate name:** `shortener` (`shortener` binary + library for tests).
+- **Deployment target:** single Linux VPS (e.g. Ubuntu 24.04) with Docker + Compose plugin.
+- **Caddy placement (initial):** same Compose project as the app (`compose.yml`).
+  When more apps share the host, move Caddy to a server-level `infra` project on a
+  shared external network; only Caddy publishes 80/443 either way.
+- **Backups:** Litestream to S3-compatible storage (see `litestream.yml.example`
+  + “Backups & restore” below). Fallback: scheduled `sqlite3 .backup` + `rclone`.
+
+## Quickstart (local)
+
+Requirements: Rust stable, Docker + Compose plugin.
+
+```bash
+cp .env.example .env
+# Edit .env: set BASE_URL=http://localhost:8080 for local, generate CSRF key:
+#   openssl rand -base64 48
+# Generate Caddy password hash for local test:
+#   docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext 'dev-password'
+
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+
+docker build -t go-shortener:latest .
+docker compose up --build
+# App: http://localhost:8080/{slug} (via Caddy), admin: http://localhost:8080/admin
+```
+
+Direct app run (dev, no Caddy):
+
+```bash
+export APP_ENV=development APP_BIND=127.0.0.1:3000 \
+  BASE_URL=http://localhost:3000 DATABASE_URL='sqlite://./dev.db?mode=rwc' \
+  RUST_LOG=debug CSRF_SIGNING_KEY="$(openssl rand -base64 48)"
+cargo run
+```
+
+## Configuration
+
+| Var | Required | Example |
+|---|---|---|
+| `APP_ENV` | no (default `development`) | `production` |
+| `APP_BIND` | no (default `0.0.0.0:3000`) | `0.0.0.0:3000` |
+| `BASE_URL` | yes | `https://go.fhola.com` |
+| `DATABASE_URL` | yes | `sqlite:///data/go.db` |
+| `RUST_LOG` | no | `info` |
+| `CSRF_SIGNING_KEY` | yes (≥32 bytes) | `openssl rand -base64 48` |
+| `ADMIN_PASSWORD_HASH` | yes (Caddy only) | Argon2id hash from `caddy hash-password` |
+
+Rules: production refuses non-HTTPS `BASE_URL` and short/missing CSRF keys.
+Never commit `.env` or hashes.
+
+## Routes
+
+```text
+GET   /                        landing
+GET   /robots.txt              Disallow: /
+GET   /health/live             no DB
+GET   /health/ready            SELECT 1 (+ migrations ran at startup)
+GET   /admin                   list + create (CSRF cookie issued)
+POST  /admin/links             create
+GET   /admin/links/{slug}      edit form
+POST  /admin/links/{slug}      update target/label/expiry
+POST  /admin/links/{slug}/disable
+POST  /admin/links/{slug}/enable
+GET   /api/v1/links            ?q=&page=&per_page= (default 20, max 100)
+POST  /api/v1/links            {target_url, custom_slug?, label?, expires_at?}
+GET   /api/v1/links/{slug}
+PATCH /api/v1/links/{slug}     at least one of target_url/label/expires_at
+DELETE /api/v1/links/{slug}    soft-disable → 204
+POST  /api/v1/links/{slug}/enable
+GET   /{slug} / HEAD /{slug}   302 active / 404 unknown+disabled / 410 expired
+```
+
+Redirects carry `Cache-Control: no-store` + `X-Robots-Tag: noindex, nofollow`.
+API errors are `{"error":{"message":"…","code":NNN}}`; `deny_unknown_fields` is on.
+`expires_at` accepts RFC 3339 (`2026-12-31T23:59:59Z`) or Unix millis; admin forms
+also accept `datetime-local` (`YYYY-MM-DDTHH:MM`, UTC).
+
+## Security model
+
+- Caddy `basic_auth argon2id` guards `/admin*` + `/api*` (exact matcher in `Caddyfile`);
+  upstream never sees `Authorization` (`header_up -Authorization`).
+- Admin POSTs: signed double-submit CSRF cookie (`HttpOnly; SameSite=Strict; Path=/;
+  Secure` on https) + `Origin`/`Referer` must match `BASE_URL`. Missing both → 403.
+- API mutations: require `Content-Type: application/json` + `X-Requested-With`
+  header; no CORS headers are ever emitted.
+- Headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, restrictive CSP on `/admin`.
+- Body cap 16 KiB, 10 s timeout, Askama auto-escaping, no credential/URL logging,
+  non-root read-only container (writable `/data` only).
+
+## Production deployment
+
+1. Provision Ubuntu 24.04, apply updates, install Docker + Compose plugin.
+2. Firewall: allow 22/80/443 only (`ufw allow 22,80,443/tcp`), restrict SSH (keys only).
+3. DNS: `go.fhola.com A → <host IP>`.
+4. On server, create restricted `.env` (mode 600): `APP_ENV=production`,
+   `BASE_URL=https://go.fhola.com`, `DATABASE_URL=sqlite:///data/go.db`,
+   `CSRF_SIGNING_KEY` (48 random bytes), `ADMIN_PASSWORD_HASH`
+   (`docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext '…'`).
+   Because argon2id hashes contain `$`, write each one as `$$` in `.env`
+   (Compose interpolates unescaped `$VAR` and would corrupt the hash —
+   verified during local stack testing).
+5. `docker compose up -d --build`; verify: `https://go.fhola.com/health/live`,
+   HTTP→HTTPS redirect, `/admin` prompts for password, app port not reachable
+   externally (`ss -tlnp` shows only 80/443).
+6. Throttling: add Caddy `rate_limit` or host `fail2ban` for `/admin* /api*`.
+
+## Upgrade / rollback
+
+- Images are pinned by tag; keep previous image: `docker tag go-shortener:latest go-shortener:prev`.
+- Upgrade: `docker compose pull && docker compose up -d --build && docker compose ps`.
+- Rollback: `docker tag go-shortener:prev go-shortener:latest && docker compose up -d`.
+- SQLite migrations run at startup and are backwards-compatible (additive only).
+
+## Credential rotation
+
+- **Admin password:** regenerate hash, update server `.env`, `docker compose up -d caddy`.
+- **CSRF key:** set new `CSRF_SIGNING_KEY`, `docker compose up -d shortener`
+  (existing sessions/cookies invalidate once; users re-load `/admin`).
+
+## Backups & restore
+
+- Recommended: Litestream sidecar using `litestream.yml.example`
+  (set `LITESTREAM_BUCKET/ENDPOINT` + `AWS_*` keys, replicate `/data/go.db`).
+- Minimal alternative (cron on host):
+  `sqlite3 /var/lib/docker/volumes/*app-data*/_data/go.db ".backup '/tmp/go-backup.db'" && rclone copy /tmp/go-backup.db remote:backups/go-$(date +%F).db`
+- **Restore test (required before calling backups done):**
+  ```bash
+  docker compose down
+  docker volume create test-restore
+  # copy backup file into volume, then:
+  docker run --rm -v test-restore:/data -v "$PWD:/b" alpine cp /b/go-backup.db /data/go.db
+  # point compose at test volume, up, verify /health/ready + known redirect
+  ```
+- Monitor: health endpoint + one known redirect; log rotation via Docker defaults;
+  alert on disk usage of `app-data`/`caddy-data`.
+
+## CI
+
+```text
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
+cargo audit
+docker build .
+```
+
+Do not auto-deploy production from unprotected branches; deploy tagged images.
