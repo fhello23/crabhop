@@ -1,4 +1,4 @@
-# `go.example.com` Link Shortener
+# Crabhop
 
 Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy.
 Implements `plan.md` MVP: public redirects, browser admin UI, protected JSON API,
