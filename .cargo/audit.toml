@@ -1,0 +1,15 @@
+# cargo-audit configuration. `cargo audit` runs in CI on every pull request.
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 (rsa "Marvin Attack" timing sidechannel, medium):
+    # rsa 0.9.10 is present in Cargo.lock ONLY as an optional sqlx-mysql
+    # dependency. It is NOT compiled into any target — verified with
+    # `cargo tree`, `cargo tree --target all`, and `cargo tree --all-features`,
+    # which all show no rsa (sqlx is pinned to default-features=false with
+    # sqlite/migrate/macros/runtime-tokio only). No fixed upgrade exists
+    # upstream, so the finding cannot be remediated by updating.
+    # Re-review when sqlx is upgraded, when features change, or when the
+    # advisory itself changes.
+    # Ignore added: 2026-09-03. Next review: 2026-12-03.
+    "RUSTSEC-2023-0071",
+]

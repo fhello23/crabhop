@@ -11,6 +11,7 @@ use shortener::web::app_router;
 
 pub const TEST_CSRF_KEY: &str = "test-csrf-signing-key-0123456789abcdef";
 pub const TEST_BASE_URL: &str = "http://localhost";
+pub const TEST_PROXY_TOKEN: &str = "test-proxy-token-0123456789abcdefGH";
 
 pub struct TestApp {
     pub router: Router,
@@ -18,13 +19,37 @@ pub struct TestApp {
 }
 
 pub async fn setup() -> TestApp {
-    let config: Arc<Config> = Config::for_tests(TEST_BASE_URL, "sqlite::memory:", TEST_CSRF_KEY);
+    setup_with_direct(false).await
+}
+
+/// App with the development loopback bypass enabled: management routes work
+/// without the proxy token (mirrors direct `cargo run` ergonomics).
+pub async fn setup_allow_direct() -> TestApp {
+    setup_with_direct(true).await
+}
+
+async fn setup_with_direct(allow_direct: bool) -> TestApp {
+    let config: Arc<Config> = Config::for_tests(
+        TEST_BASE_URL,
+        "sqlite::memory:",
+        TEST_CSRF_KEY,
+        TEST_PROXY_TOKEN,
+        allow_direct,
+    );
     let db = connect_db(&config.database_url)
         .await
         .expect("test database connects and migrates");
     let state = AppState { db, config };
     let router = app_router(state.clone());
     TestApp { router, state }
+}
+
+/// Attach the proxy proof header required by /admin and /api.
+pub fn with_proxy_token(b: axum::http::request::Builder) -> axum::http::request::Builder {
+    b.header(
+        shortener::web::security::PROXY_TOKEN_HEADER,
+        TEST_PROXY_TOKEN,
+    )
 }
 
 pub async fn create_link(
@@ -84,9 +109,7 @@ pub fn extract_set_cookie_token(headers: &axum::http::HeaderMap) -> Option<Strin
 /// Perform a GET /admin to obtain a fresh (token, cookie) pair.
 pub async fn get_admin_csrf(app: &TestApp) -> (String, String) {
     use tower::ServiceExt;
-    let req = axum::http::Request::builder()
-        .method("GET")
-        .uri("/admin")
+    let req = with_proxy_token(axum::http::Request::builder().method("GET").uri("/admin"))
         .body(axum::body::Body::empty())
         .unwrap();
     let res = app.router.clone().oneshot(req).await.unwrap();

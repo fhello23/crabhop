@@ -1,0 +1,139 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --all-features
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fail if rsa is reachable in the compiled graph
+        # The RUSTSEC-2023-0071 ignore in .cargo/audit.toml is valid only
+        # while rsa stays out of what we actually compile. Inspect the graph
+        # itself (every target, every feature, incl. build/test deps) instead
+        # of trusting the audit exit status alone: if this trips, enabling
+        # the ignored dependency made it reachable — remove the ignore and
+        # remediate instead of updating it.
+        run: |
+          set -eu
+          graph="$(cargo tree --target all --edges normal,build,dev --all-features --prefix none)"
+          if printf '%s\n' "$graph" | grep -Eq '^rsa v'; then
+            echo '::error::rsa is reachable in the compiled dependency graph; the audit ignore no longer applies' >&2
+            printf '%s\n' "$graph" | grep -E '^rsa v' >&2
+            exit 1
+          fi
+          echo "rsa absent from the compiled graph on all targets"
+      - run: cargo install cargo-audit --locked
+      # Honors .cargo/audit.toml (narrowly scoped, dated ignores only).
+      - run: cargo audit
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t go-shortener:ci .
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate throwaway stack secrets
+        run: |
+          set -eu
+          CSRF="$(openssl rand -base64 48)"
+          TOKEN="$(openssl rand -base64 48)"
+          HASH="$(docker run --rm caddy:2 caddy hash-password --algorithm argon2id --plaintext 'ci-admin-pass')"
+          ESCAPED_HASH="$(printf '%s' "$HASH" | sed 's/\$/\$\$/g')"
+          {
+            printf 'APP_ENV=development\n'
+            printf 'APP_BIND=0.0.0.0:3000\n'
+            printf 'BASE_URL=http://localhost:8080\n'
+            printf 'SITE_ADDRESS=http://localhost\n'
+            printf 'CADDY_HTTP_HOST=127.0.0.1\n'
+            printf 'CADDY_HTTP_PORT=8080\n'
+            printf 'CADDY_HTTPS_HOST=127.0.0.1\n'
+            printf 'CADDY_HTTPS_PORT=8443\n'
+            printf 'DATABASE_URL=sqlite:///data/go.db\n'
+            printf 'RUST_LOG=warn\n'
+            printf 'CSRF_SIGNING_KEY=%s\n' "$CSRF"
+            printf 'UPSTREAM_AUTH_TOKEN=%s\n' "$TOKEN"
+            printf 'ADMIN_PASSWORD_HASH=%s\n' "$ESCAPED_HASH"
+          } > .env
+      - name: Start stack
+        run: docker compose up -d --build
+      - name: Wait for app readiness
+        run: |
+          set -eu
+          for i in $(seq 1 30); do
+            if curl --silent --fail http://localhost:8080/health/live >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "app never became ready" >&2
+          docker compose logs
+          exit 1
+      - name: Caddy authentication smoke test
+        run: |
+          set -eu
+          export SMOKE_APP_CONTAINER="$(docker compose ps -q shortener)"
+          ADMIN_PASSWORD='ci-admin-pass' ./scripts/smoke-caddy-auth.sh http://localhost:8080
+      - name: End-to-end link lifecycle through Caddy
+        run: |
+          set -eu
+          SLUG="ci-$GITHUB_RUN_ID"
+          curl --silent --show-error --fail -u 'admin:ci-admin-pass' \
+            -X POST http://localhost:8080/api/v1/links \
+            -H 'Content-Type: application/json' \
+            -H 'X-Requested-With: XMLHttpRequest' \
+            -d "{\"target_url\":\"https://example.com/ci\",\"custom_slug\":\"$SLUG\"}"
+          echo
+          CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://localhost:8080/$SLUG")"
+          test "$CODE" = "302"
+      - name: Application port must not be published
+        run: |
+          set -eu
+          if curl --silent --max-time 5 http://localhost:3000/health/live >/dev/null; then
+            echo "port 3000 is reachable directly; management boundary depends on Caddy" >&2
+            exit 1
+          fi
+          echo "port 3000 correctly unreachable from the host"
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

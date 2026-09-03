@@ -13,6 +13,7 @@
 //!   matching the configured BASE_URL origin; requests with neither are
 //!   rejected.
 
+use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -21,12 +22,74 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
+use crate::state::AppState;
+
 type HmacSha256 = Hmac<Sha256>;
 
 pub const CSRF_COOKIE_NAME: &str = "csrf_token";
 pub const CSRF_FORM_FIELD: &str = "csrf_token";
 pub const CSRF_TTL_MILLIS: i64 = 24 * 60 * 60 * 1000; // 24h
 pub const API_CSRF_HEADER: &str = "x-requested-with";
+/// Header Caddy injects after authenticating the administrator. The value is
+/// the shared `UPSTREAM_AUTH_TOKEN`; its presence is the application's only
+/// proof that a management request passed the edge.
+pub const PROXY_TOKEN_HEADER: &str = "x-crabhop-proxy-token";
+
+/// Management routes fail closed at the application boundary: even if the
+/// application port is reachable directly, /admin and /api require proof of
+/// edge authentication. `X-Authenticated-User` and `Authorization` are
+/// deliberately ignored here — either can be forged by a direct caller.
+pub fn is_management_path(path: &str) -> bool {
+    path == "/admin" || path.starts_with("/admin/") || path == "/api" || path.starts_with("/api/")
+}
+
+pub async fn management_auth_mw(
+    State(state): State<AppState>,
+    req: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if !is_management_path(req.uri().path()) {
+        return next.run(req).await;
+    }
+    if state.config.allow_direct_management {
+        return next.run(req).await;
+    }
+    let authorized = match (
+        state.config.upstream_auth_token.as_ref(),
+        req.headers().get(PROXY_TOKEN_HEADER),
+    ) {
+        (Some(expected), Some(provided)) => {
+            bool::from(expected.as_bytes().ct_eq(provided.as_bytes()))
+        }
+        _ => false,
+    };
+    if authorized {
+        return next.run(req).await;
+    }
+    management_unauthorized(req.uri().path())
+}
+
+fn management_unauthorized(path: &str) -> Response {
+    let mut res = if path.starts_with("/api") {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::CONTENT_TYPE, "application/json")],
+            r#"{"error":{"message":"unauthorized","code":401}}"#,
+        )
+            .into_response()
+    } else {
+        (StatusCode::UNAUTHORIZED, "unauthorized").into_response()
+    };
+    // Belt-and-braces: the outer security-headers layer also stamps
+    // management responses, but the 401 must hold regardless of layer order.
+    if let Ok(v) = "no-store".parse() {
+        res.headers_mut().insert(header::CACHE_CONTROL, v);
+    }
+    if let Ok(v) = "nosniff".parse() {
+        res.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, v);
+    }
+    res
+}
 
 pub fn generate_csrf_token(signing_key: &[u8], now_millis: i64) -> String {
     let expiry = now_millis + CSRF_TTL_MILLIS;
@@ -174,6 +237,13 @@ pub async fn security_headers_mw(
     }
     if let Ok(v) = "same-origin".parse() {
         headers.insert(header::REFERRER_POLICY, v);
+    }
+    if is_management_path(&path) {
+        // Private link data must never sit in a browser cache: stamp every
+        // management response, including errors and redirects.
+        if let Ok(v) = "no-store".parse() {
+            headers.insert(header::CACHE_CONTROL, v);
+        }
     }
     if path.starts_with("/admin") {
         if let Ok(v) = "default-src 'self'; style-src 'self' 'unsafe-inline'; \

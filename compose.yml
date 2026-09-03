@@ -30,7 +30,8 @@ services:
     logging: *container-logging
 
   caddy:
-    image: caddy:2
+    # Pinned by digest (reviewed 2026-09-03); Dependabot proposes updates.
+    image: caddy:2@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
     restart: unless-stopped
     ports:
       - "${CADDY_HTTP_HOST:-0.0.0.0}:${CADDY_HTTP_PORT:-80}:80"

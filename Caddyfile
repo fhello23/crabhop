@@ -24,6 +24,14 @@
 
 	reverse_proxy shortener:3000 {
 		header_up -Authorization
+		# Set (not append): this replaces any client-supplied value, so the
+		# app trusts X-Crabhop-Proxy-Token only because Caddy overwrites it
+		# here after Basic Auth succeeded.
+		header_up X-Crabhop-Proxy-Token {$UPSTREAM_AUTH_TOKEN}
 		header_up X-Authenticated-User {http.auth.user.id}
 	}
+
+	# Conservative HSTS: one year, no includeSubDomains (add it only once
+	# every subdomain is known HTTPS), never preload without a review.
+	header Strict-Transport-Security "max-age=31536000"
 }
