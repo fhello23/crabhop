@@ -1,7 +1,7 @@
 # Crabhop
 
-Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy.
-Implements `plan.md` MVP: public redirects, browser admin UI, protected JSON API,
+Single-administrator link shortener in Rust (Axum + SQLite), behind Caddy
+Features: public redirects, browser admin UI, protected JSON API,
 Docker packaging, and off-machine backup runbook.
 
 ## Quickstart (local)
