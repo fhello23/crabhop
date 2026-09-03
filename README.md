@@ -46,7 +46,7 @@ cargo run
 | `DATABASE_URL` | yes | `sqlite:///data/go.db` |
 | `RUST_LOG` | no | `info` |
 | `CSRF_SIGNING_KEY` | yes (≥32 bytes) | `openssl rand -base64 48` |
-| `SITE_ADDRESS` | yes (Caddy only) | local: `http://localhost`; production: `go.fhola.com` |
+| `SITE_ADDRESS` | yes (Caddy only) | local: `http://localhost`; production: `<your-domain>` |
 | `CADDY_HTTP_HOST` / `CADDY_HTTP_PORT` | no | local: `127.0.0.1` / `8080`; production: `0.0.0.0` / `80` |
 | `CADDY_HTTPS_HOST` / `CADDY_HTTPS_PORT` | no | local: `127.0.0.1` / `8443`; production: `0.0.0.0` / `443` |
 | `ADMIN_PASSWORD_HASH` | yes (Caddy only) | Argon2id hash from `caddy hash-password` |
