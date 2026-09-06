@@ -109,6 +109,89 @@ async fn status_filters_partition_links() {
 }
 
 #[tokio::test]
+async fn expiring_soon_boundaries_compose_with_search_kind_and_pagination() {
+    use shortener::db::links::{list_links, EXPIRING_SOON_MILLIS};
+    let app = setup().await;
+    let now = now_millis();
+    for (slug, expiry, disabled, text) in [
+        ("soon-first", Some(now + 1), false, false),
+        ("soon-last", Some(now + EXPIRING_SOON_MILLIS), false, false),
+        ("soon-text", Some(now + 1000), false, true),
+        ("soon-expired", Some(now), false, false),
+        (
+            "soon-later",
+            Some(now + EXPIRING_SOON_MILLIS + 1),
+            false,
+            false,
+        ),
+        ("soon-never", None, false, false),
+        ("soon-disabled", Some(now + 1000), true, false),
+    ] {
+        common::create_link(&app.state, Some(slug), "https://example.com", None).await;
+        sqlx::query(
+            "UPDATE links SET expires_at = ?, disabled_at = ?, text_content = ?, target_url = ? WHERE slug = ?",
+        )
+        .bind(expiry)
+        .bind(disabled.then_some(now))
+        .bind(text.then_some("notes"))
+        .bind(if text { "" } else { "https://example.com/" })
+        .bind(slug)
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    }
+    let mut query = params(StatusFilter::ExpiringSoon, LinkSort::SlugAsc);
+    query.now = now;
+    let result = list_links(&app.state.db, query).await.unwrap();
+    assert_eq!(result.total, 3);
+    assert_eq!(
+        slugs(&result.items),
+        vec!["soon-first", "soon-last", "soon-text"]
+    );
+    for (kind, expected, total) in [
+        (KindFilter::Url, "soon-last", 2),
+        (KindFilter::Text, "soon-text", 1),
+    ] {
+        let mut query = params(StatusFilter::ExpiringSoon, LinkSort::SlugAsc);
+        query.now = now;
+        query.query = Some("soon-".into());
+        query.kind = kind;
+        query.per_page = 1;
+        query.page = 2;
+        let result = list_links(&app.state.db, query).await.unwrap();
+        assert_eq!(result.total, total);
+        assert_eq!(slugs(&result.items), vec![expected]);
+    }
+}
+
+#[tokio::test]
+async fn expiring_soon_is_available_in_admin_and_api() {
+    let app = setup().await;
+    make_links(&app).await;
+    for path in [
+        "/admin?status=expiring&kind=url",
+        "/api/v1/links?status=expiring&kind=url",
+    ] {
+        let req = with_proxy_token(axum::http::Request::builder().uri(path))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let (status, _, body) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        if path.starts_with("/api") {
+            let data: serde_json::Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(data["data"].as_array().unwrap().len(), 1);
+            assert_eq!(data["data"][0]["slug"], "beta");
+        } else {
+            assert!(body.contains("value=\"expiring\" selected"));
+            assert!(body.contains("/admin/links/beta"));
+            assert!(!body.contains("/admin/links/alpha"));
+            assert!(body.contains("status=expiring&amp;kind=url"));
+        }
+    }
+}
+
+#[tokio::test]
 async fn sort_modes_order_deterministically() {
     let app = setup().await;
     make_links(&app).await;

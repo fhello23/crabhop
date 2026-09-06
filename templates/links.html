@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "expiration.html" as expiration %}
 {% block content %}
 <h1>Links</h1>
 
@@ -26,18 +27,16 @@
   <form method="post" action="/admin/links">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>Destination URL (http/https)
-      <input type="url" name="target_url" required maxlength="4096" placeholder="https://example.com/a/long/path">
+      <input type="url" name="target_url" required maxlength="4096" placeholder="https://example.com/a/long/path" value="{% if let Some(value) = draft.target_url %}{{ value }}{% endif %}">
     </label>
     <div class="grid">
       <label>Custom slug (optional, 3–64: a-z 0-9 _ -)
-        <input type="text" name="custom_slug" minlength="3" maxlength="64" placeholder="example">
+        <input type="text" name="custom_slug" minlength="3" maxlength="64" placeholder="example" value="{% if draft.text_content.is_none() %}{% if let Some(value) = draft.custom_slug %}{{ value }}{% endif %}{% endif %}">
       </label>
-      <label>Expires in UTC (optional)
-        <input type="datetime-local" name="expires_at">
-      </label>
+      {% call expiration::field("url-expiration", url_expiration) %}
     </div>
     <label>Label (optional)
-      <input type="text" name="label" maxlength="256" placeholder="Quarterly report">
+      <input type="text" name="label" maxlength="256" placeholder="Quarterly report" value="{% if draft.text_content.is_none() %}{% if let Some(value) = draft.label %}{{ value }}{% endif %}{% endif %}">
     </label>
     <button type="submit">Create short link</button>
   </form>
@@ -60,9 +59,7 @@
         <label>Custom slug (optional, 3–64: a-z 0-9 _ -)
           <input type="text" name="custom_slug" minlength="3" maxlength="64" placeholder="my-notes" value="{% if let Some(value) = draft.custom_slug %}{{ value }}{% endif %}">
         </label>
-        <label>Expires in UTC (optional)
-          <input type="datetime-local" name="expires_at" value="{% if let Some(value) = draft.expires_at %}{{ value }}{% endif %}">
-        </label>
+        {% call expiration::field("text-expiration", text_expiration) %}
       </div>
       <label>Title (optional, visible to visitors)
         <input type="text" name="label" maxlength="256" placeholder="Meeting notes" value="{% if let Some(value) = draft.label %}{{ value }}{% endif %}">
@@ -79,6 +76,7 @@
     <select name="status" aria-label="Filter by status">
       <option value="all" {% if status == "all" %}selected{% endif %}>All</option>
       <option value="active" {% if status == "active" %}selected{% endif %}>Active</option>
+      <option value="expiring" {% if status == "expiring" %}selected{% endif %}>Expiring soon (7 days)</option>
       <option value="expired" {% if status == "expired" %}selected{% endif %}>Expired</option>
       <option value="disabled" {% if status == "disabled" %}selected{% endif %}>Disabled</option>
     </select>
@@ -125,9 +123,9 @@
           {% if l.disabled %}<span class="pill off">disabled</span>
           {% else if l.expired %}<span class="pill expired">expired</span>
           {% else %}<span class="pill on">active</span>{% endif %}
-          {% if let Some(e) = l.expires_at %}<div class="muted"><small>exp {{ e }}</small></div>{% endif %}
+          {% if let Some(e) = l.expires_at %}<div class="muted"><small>exp <time datetime="{{ e }}" data-local-time>{{ e }}</time></small></div>{% endif %}
         </td>
-        <td class="date"><small>{{ l.updated_at }}</small></td>
+        <td class="date"><small><time datetime="{{ l.updated_at }}" data-local-time="date">{{ l.updated_at[..10] }}</time></small></td>
         <td>
           <div class="actions">
             <button type="button" class="secondary small" data-copy-value="{{ l.short_url }}">Copy</button>

@@ -27,6 +27,8 @@ use crate::web::security::{
 #[allow(dead_code)]
 struct LinksTemplate {
     draft: CreateForm,
+    url_expiration: ExpirationField,
+    text_expiration: ExpirationField,
     title: String,
     brand_host: String,
     csrf_token: String,
@@ -75,7 +77,7 @@ struct EditTemplate {
     short_url: String,
     target_url: String,
     label: String,
-    expires_input: String,
+    expiration: ExpirationField,
     expires_display: String,
     created_at: String,
     updated_at: String,
@@ -93,6 +95,35 @@ struct ChartBar {
     label: String,
     date: String,
     click_count: i64,
+}
+
+/// UTC is the no-JavaScript fallback. The browser enhances this into a local
+/// datetime control while submitting the original absolute instant as RFC 3339.
+struct ExpirationField {
+    input: String,
+    instant: String,
+}
+
+impl ExpirationField {
+    fn new(millis: Option<i64>) -> Self {
+        let instant = millis
+            .and_then(|m| {
+                time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(m) * 1_000_000).ok()
+            })
+            .and_then(|date| {
+                date.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
+            .unwrap_or_default();
+        Self {
+            input: instant.trim_end_matches('Z').to_string(),
+            instant,
+        }
+    }
+
+    fn from_raw(raw: Option<&str>) -> Self {
+        Self::new(parse_admin_expires(raw).ok().flatten())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,11 +267,7 @@ fn to_row(state: &AppState, item: LinkListItem, now: i64) -> LinkRow {
         label: item.link.label.clone(),
         total_clicks: item.total_clicks,
         created_at: millis_to_rfc3339(item.link.created_at),
-        updated_at: millis_to_rfc3339(item.link.updated_at)
-            .split('T')
-            .next()
-            .unwrap_or_default()
-            .to_string(),
+        updated_at: millis_to_rfc3339(item.link.updated_at),
         expires_at: item.link.expires_at.map(millis_to_rfc3339),
         disabled: item.link.is_disabled(),
         expired: item.link.is_expired(now),
@@ -312,6 +339,10 @@ fn parse_admin_expires(raw: Option<&str>) -> Result<Option<i64>, AppError> {
     if let Some(m) = parse_expires_at(s) {
         return Ok(Some(m));
     }
+    // UTC fallback inputs may contain seconds and fractional seconds.
+    if let Some(m) = parse_expires_at(&format!("{s}Z")) {
+        return Ok(Some(m));
+    }
     // datetime-local without seconds/timezone, e.g. 2026-12-31T23:59
     let fmt = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]T[hour]:[minute]")
         .map_err(AppError::internal)?;
@@ -365,22 +396,6 @@ fn day_click_label(day_start_utc: i64, count: i64) -> String {
     let day = dt.format(&fmt).unwrap_or_default();
     let noun = if count == 1 { "click" } else { "clicks" };
     format!("{day}: {count} {noun}")
-}
-
-fn format_datetime_local(millis: Option<i64>) -> String {
-    match millis {
-        None => String::new(),
-        Some(m) => {
-            let secs = m.div_euclid(1000);
-            let dt = time::OffsetDateTime::from_unix_timestamp(secs)
-                .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
-            let fmt = time::format_description::parse_borrowed::<2>(
-                "[year]-[month]-[day]T[hour]:[minute]",
-            )
-            .expect("valid format");
-            dt.format(&fmt).unwrap_or_default()
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +458,8 @@ pub async fn admin_list_with_created(
             };
             let tpl = LinksTemplate {
                 draft: CreateForm::default(),
+                url_expiration: ExpirationField::new(None),
+                text_expiration: ExpirationField::new(None),
                 title: "Admin — Links".to_string(),
                 brand_host: brand_host(&state),
                 csrf_token,
@@ -532,6 +549,16 @@ async fn render_list_with_error(
     .unwrap_or_default();
     let tpl = LinksTemplate {
         draft: draft.clone(),
+        url_expiration: ExpirationField::from_raw(if draft.text_content.is_none() {
+            draft.expires_at.as_deref()
+        } else {
+            None
+        }),
+        text_expiration: ExpirationField::from_raw(if draft.text_content.is_some() {
+            draft.expires_at.as_deref()
+        } else {
+            None
+        }),
         title: "Admin — Links".to_string(),
         brand_host: brand_host(state),
         csrf_token,
@@ -652,7 +679,7 @@ pub async fn admin_edit_form(
                 target_url: link.target_url.clone(),
                 text_content: link.text_content.clone(),
                 label: link.label.clone().unwrap_or_default(),
-                expires_input: format_datetime_local(link.expires_at),
+                expiration: ExpirationField::new(link.expires_at),
                 expires_display: link
                     .expires_at
                     .map(millis_to_rfc3339)
@@ -787,7 +814,7 @@ async fn render_edit_with_error(
                     .as_ref()
                     .map(|text| draft.text_content.clone().unwrap_or_else(|| text.clone())),
                 label: draft.label.clone().unwrap_or_default(),
-                expires_input: draft.expires_at.clone().unwrap_or_default(),
+                expiration: ExpirationField::from_raw(draft.expires_at.as_deref()),
                 expires_display: link
                     .expires_at
                     .map(millis_to_rfc3339)

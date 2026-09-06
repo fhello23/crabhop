@@ -64,3 +64,6 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; 
 .text-preview .align-center { text-align: center; }
 .text-preview .align-right { text-align: right; }
 .code-language select { max-width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.expiration-presets { margin-top: 8px; }
+.expiration-help { margin: 6px 0 0; }
+.expiration-field { margin-bottom: 12px; min-width: 0; }

@@ -143,6 +143,7 @@ jobs:
         run: |
           NODE_PATH="$RUNNER_TEMP/crabhop-browser/node_modules" node scripts/smoke-admin-browser.cjs http://localhost:8080
           NODE_PATH="$RUNNER_TEMP/crabhop-browser/node_modules" node scripts/smoke-text-shares.cjs http://localhost:8080
+          NODE_PATH="$RUNNER_TEMP/crabhop-browser/node_modules" node scripts/smoke-expiration.cjs http://localhost:8080
       - name: Application port must not be published
         run: |
           set -eu

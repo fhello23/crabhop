@@ -100,8 +100,14 @@ GET   /{slug} / HEAD /{slug}   302 redirect / 200 shared text / 404 unknown+disa
 Redirects carry `Cache-Control: no-store` + `X-Robots-Tag: noindex, nofollow`.
 API errors are `{"error":{"message":"…","code":NNN}}`; `deny_unknown_fields` is on.
 `expires_at` must be in the future and accepts RFC 3339
-(`2026-12-31T23:59:59Z`) or Unix millis. Admin date fields are explicitly UTC
-and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
+(`2026-12-31T23:59:59Z`) or Unix millis. Admin expiration fields display your
+browser's timezone and submit an absolute RFC 3339 timestamp. **1 hour**,
+**24 hours**, and **7 days** presets expire that much time from the click;
+**Never** clears expiration. Both link types support these controls on create
+and edit forms. Saving an unchanged expiration preserves its exact instant,
+including seconds and repeated daylight-saving hours. Nonexistent local times
+during a daylight-saving jump are rejected. Without JavaScript, fields remain
+clearly labeled UTC and accept `datetime-local` values.
 Expiration values must fit an RFC 3339 date (through year 9999); out-of-range
 timestamps are rejected instead of being displayed as 1970.
 
@@ -143,9 +149,14 @@ analytics. Text pages use `no-store`, `noindex`, and a restrictive CSP.
 - Storage is one row per link per UTC day (`link_daily_clicks`): total
   clicks, last-7-days clicks, last-clicked time, and a zero-filled 30-day
   series. No IP addresses, referrers, or user agents are stored.
-- The admin list defaults to **Active**, with `All / Active / Expired /
+- The admin list defaults to **Active**, with `All / Active / Expiring soon / Expired /
   Disabled` status filters and `All types / URLs / Shared text` type filters.
-  The Updated column shows `YYYY-MM-DD` in UTC. A `Most clicked` sort is also
+  **Expiring soon (7 days)** includes enabled links expiring after now and within
+  the next 7 × 24 hours, inclusive of the upper boundary. It also works in the
+  API as `status=expiring`, combined with search, type filters, and pagination.
+  Admin timestamps display in your browser's timezone (UTC without JavaScript);
+  the Updated column remains date-only. Daily analytics buckets remain UTC.
+  A `Most clicked` sort is also
   available; each link's edit page shows
   the activity card with a 30-day chart and an expandable daily-value table
   that works with a keyboard or screen reader.
@@ -321,6 +332,8 @@ docker build .
 compose startup + Caddy authentication smoke test (scripts/smoke-caddy-auth.sh),
 log-redaction smoke test (scripts/smoke-log-privacy.py),
 native browser admin form lifecycle (scripts/smoke-admin-browser.cjs),
+text previews and downloads (scripts/smoke-text-shares.cjs),
+local expiration, presets, DST, and filters (scripts/smoke-expiration.cjs),
 an end-to-end link lifecycle through the proxy, and a check that port 3000
 is not published
 ```
