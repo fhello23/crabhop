@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }}</title>
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/vendor/highlight-github.min.css">
   <script src="/static/app.js" defer></script>
+  <script src="/static/vendor/markdown-it.min.js" defer></script>
+  <script src="/static/vendor/highlight.min.js" defer></script>
+  <script src="/static/text-shares.js" defer></script>
 </head>
 <body>
   <main class="container shared-page">
@@ -13,11 +17,14 @@
     <p id="read-only-note" class="muted">Shared text · Read only. Select any part or copy everything.</p>
     <div class="actions">
       <button type="button" data-copy-target="shared-text" aria-describedby="copy-status">Copy text</button>
+      <a class="button secondary" href="/{{ slug }}/download" download="{{ slug }}.txt">Download as .txt</a>
       <span id="copy-status" role="status" aria-live="polite" class="muted"></span>
     </div>
-    <label for="shared-text">Shared text</label>
+    <div data-text-share>
+    <label for="shared-text" data-text-label>Shared text</label>
     <textarea id="shared-text" class="shared-text" readonly spellcheck="false" aria-describedby="read-only-note">
 {{ text_content }}</textarea>
+    </div>
     <noscript><p>Select the text and use your device’s copy command to copy it.</p></noscript>
   </main>
 </body>

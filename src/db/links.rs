@@ -164,6 +164,7 @@ pub enum StatusFilter {
     #[default]
     All,
     Active,
+    ExpiringSoon,
     Expired,
     Disabled,
 }
@@ -175,10 +176,11 @@ impl StatusFilter {
         match raw.unwrap_or("").trim().to_ascii_lowercase().as_str() {
             "" | "all" => Ok(Self::All),
             "active" => Ok(Self::Active),
+            "expiring" => Ok(Self::ExpiringSoon),
             "expired" => Ok(Self::Expired),
             "disabled" => Ok(Self::Disabled),
             other => Err(AppError::Validation(format!(
-                "invalid status filter {other:?}: expected all|active|expired|disabled"
+                "invalid status filter {other:?}: expected all|active|expiring|expired|disabled"
             ))),
         }
     }
@@ -187,6 +189,7 @@ impl StatusFilter {
         match self {
             Self::All => "all",
             Self::Active => "active",
+            Self::ExpiringSoon => "expiring",
             Self::Expired => "expired",
             Self::Disabled => "disabled",
         }
@@ -332,12 +335,16 @@ fn status_predicate(status: StatusFilter) -> &'static str {
     match status {
         StatusFilter::All => "",
         StatusFilter::Active => "disabled_at IS NULL AND (expires_at IS NULL OR expires_at > ?)",
+        StatusFilter::ExpiringSoon => "disabled_at IS NULL AND expires_at > ? AND expires_at <= ?",
         StatusFilter::Expired => {
             "disabled_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?"
         }
         StatusFilter::Disabled => "disabled_at IS NOT NULL",
     }
 }
+
+/// Expiring soon means enabled links expiring within the next 7 × 24 hours.
+pub const EXPIRING_SOON_MILLIS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 /// Ordering fragment. Every ordering ends in a stable secondary key; column
 /// names come only from this fixed match, never from query input.
@@ -399,6 +406,9 @@ pub async fn list_links(pool: &SqlitePool, params: ListParams) -> Result<ListRes
     if needs_now {
         count_q = count_q.bind(params.now);
     }
+    if params.status == StatusFilter::ExpiringSoon {
+        count_q = count_q.bind(params.now.saturating_add(EXPIRING_SOON_MILLIS));
+    }
     if let Some(ref like) = like_opt {
         count_q = count_q.bind(like).bind(like).bind(like);
     }
@@ -412,6 +422,9 @@ pub async fn list_links(pool: &SqlitePool, params: ListParams) -> Result<ListRes
     let mut list_q = sqlx::query_as::<_, LinkListRow>(&list_sql);
     if needs_now {
         list_q = list_q.bind(params.now);
+    }
+    if params.status == StatusFilter::ExpiringSoon {
+        list_q = list_q.bind(params.now.saturating_add(EXPIRING_SOON_MILLIS));
     }
     if let Some(ref like) = like_opt {
         list_q = list_q.bind(like).bind(like).bind(like);

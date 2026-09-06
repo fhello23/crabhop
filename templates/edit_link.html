@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "expiration.html" as expiration %}
 {% block content %}
 <p><a href="/admin">&larr; Back to links</a></p>
 <h1>Edit <code>/{{ slug }}</code></h1>
@@ -7,7 +8,7 @@
   <input id="short-url" type="text" readonly value="{{ short_url }}">
   <button type="button" data-copy-target="short-url">Copy</button>
 </p>
-<p class="muted"><small>Created {{ created_at }} · Updated {{ updated_at }} · Expires {{ expires_display }}</small></p>
+<p class="muted"><small>Created <time datetime="{{ created_at }}" data-local-time>{{ created_at }}</time> · Updated <time datetime="{{ updated_at }}" data-local-time>{{ updated_at }}</time> · Expires {% if expires_display == "never" %}never{% else %}<time datetime="{{ expires_display }}" data-local-time>{{ expires_display }}</time>{% endif %}</small></p>
 
 {% if let Some(msg) = error %}
 <div class="banner error" role="alert">{{ msg }}</div>
@@ -19,10 +20,12 @@
   <form method="post" action="/admin/links/{{ slug }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if let Some(text) = text_content %}
-    <label>Shared text
+    <div data-text-share>
+    <label data-text-label>Shared text
       <textarea name="text_content" rows="16" required maxlength="65536">
 {{ text }}</textarea>
     </label>
+    </div>
     <p class="muted"><small>Up to 64 KiB. Visitors can only read and copy. Saving updates the existing shared page.</small></p>
     {% else %}
     <label>Destination URL (http/https)
@@ -32,16 +35,14 @@
     <label>{% if text_content.is_some() %}Title (optional, visible to visitors){% else %}Label (optional){% endif %}
       <input type="text" name="label" maxlength="256" value="{{ label }}">
     </label>
-    <label>Expires in UTC (optional, empty = never)
-      <input type="datetime-local" name="expires_at" value="{{ expires_input }}">
-    </label>
+    {% call expiration::field("edit-expiration", expiration) %}
     <button type="submit">Save changes</button>
   </form>
 </section>
 
 <section class="card">
   <h2>Activity</h2>
-  <p><strong>{{ activity_total }}</strong> total clicks · <strong>{{ activity_7d }}</strong> in the last 7 days · Last clicked: {{ activity_last }}</p>
+  <p><strong>{{ activity_total }}</strong> total clicks · <strong>{{ activity_7d }}</strong> in the last 7 days · Last clicked: {% if activity_last == "Never" %}Never{% else %}<time datetime="{{ activity_last }}" data-local-time>{{ activity_last }}</time>{% endif %}</p>
   <div class="chart" aria-hidden="true">
     {% for b in chart_bars %}
     <div class="bar" style="--h: {{ b.height_pct }}%" title="{{ b.label }}"></div>

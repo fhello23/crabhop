@@ -1,0 +1,7 @@
+{% macro field(id, expiration) %}
+<div class="expiration-field" data-expiration>
+  <label for="{{ id }}"><span data-expiration-label>Expires in UTC (optional)</span></label>
+  <input id="{{ id }}" type="datetime-local" name="expires_at" step="0.001" value="{{ expiration.input }}" data-expiration-input data-instant="{{ expiration.instant }}" aria-describedby="{{ id }}-help">
+  <p id="{{ id }}-help" class="muted expiration-help"><small data-expiration-help>Leave empty for no expiration. Dates are in UTC.</small></p>
+</div>
+{% endmacro %}

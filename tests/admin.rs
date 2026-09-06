@@ -286,3 +286,88 @@ async fn admin_validation_errors_are_actionable() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body.contains("scheme"), "body should explain: {body}");
 }
+
+#[tokio::test]
+async fn expiration_inputs_preserve_absolute_instants_and_utc_fallback_precision() {
+    let app = setup().await;
+    let (token, cookie) = get_admin_csrf(&app).await;
+    let req = post_admin(
+        "/admin/links",
+        "target_url=https%3A%2F%2Fexample.com&expires_at=9223372036854775807",
+        &token,
+        &cookie,
+        Some("http://localhost"),
+    );
+    let (status, _, body) =
+        response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        !body.contains("1970-"),
+        "invalid dates must not become epoch dates"
+    );
+    assert!(body.contains("data-instant=\"\""));
+    for (index, expiration) in [
+        "2031-06-15T09:15:12.345-04:00",
+        "2031-06-15T13:15:12.345Z",
+        "2031-06-15T13:15:12.345",
+        "2031-06-15T13:15",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let slug = format!("expiry-{index}");
+        let form = serde_urlencoded::to_string([
+            ("target_url", "https://example.com"),
+            ("custom_slug", &slug),
+            ("expires_at", expiration),
+        ])
+        .unwrap();
+        let req = post_admin(
+            "/admin/links",
+            &form,
+            &token,
+            &cookie,
+            Some("http://localhost"),
+        );
+        let (status, _, body) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+        let expected = shortener::state::parse_expires_at(if index == 3 {
+            "2031-06-15T13:15:00Z"
+        } else {
+            "2031-06-15T13:15:12.345Z"
+        })
+        .unwrap();
+        let link = shortener::db::links::get_link(&app.state.db, &slug)
+            .await
+            .unwrap();
+        assert_eq!(link.expires_at, Some(expected));
+        let req =
+            with_proxy_token(axum::http::Request::builder().uri(format!("/admin/links/{slug}")))
+                .body(axum::body::Body::empty())
+                .unwrap();
+        let (_, _, html) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert!(html.contains("Expires in UTC (optional)"));
+        if index != 3 {
+            assert!(html.contains("value=\"2031-06-15T13:15:12.345\""));
+            assert!(html.contains("data-instant=\"2031-06-15T13:15:12.345Z\""));
+        }
+        // A duplicate slug re-renders the draft with its canonical instant.
+        let req = post_admin(
+            "/admin/links",
+            &form,
+            &token,
+            &cookie,
+            Some("http://localhost"),
+        );
+        let (status, _, html) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert!(html.contains(&format!("value=\"{slug}\"")));
+        assert!(html.contains("value=\"https://example.com\""));
+        if index != 3 {
+            assert!(html.contains("data-instant=\"2031-06-15T13:15:12.345Z\""));
+        }
+    }
+}
