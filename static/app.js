@@ -28,6 +28,7 @@ document.addEventListener("click", async (event) => {
   } catch {
     let copied = false;
     if (input) {
+      input.dispatchEvent(new Event("reveal-text"));
       input.focus();
       input.select();
       try { copied = document.execCommand("copy"); } catch { /* manual copy remains available */ }

@@ -49,10 +49,12 @@
     <p class="muted">Create a page anyone with the link can read and copy. Only you can edit it from the admin area.</p>
     <form method="post" action="/admin/links">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Text to share
+      <div data-text-share>
+      <label data-text-label>Text to share
         <textarea name="text_content" rows="10" required maxlength="65536" aria-describedby="text-limit" placeholder="Paste or write your text here…">
 {% if let Some(text) = draft.text_content %}{{ text }}{% endif %}</textarea>
       </label>
+      </div>
       <p id="text-limit" class="muted"><small>Plain text, up to 64 KiB. Formatting and line breaks are preserved.</small></p>
       <div class="grid">
         <label>Custom slug (optional, 3–64: a-z 0-9 _ -)

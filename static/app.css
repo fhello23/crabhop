@@ -50,3 +50,17 @@ textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; 
 .shared-page { padding-top: 24px; padding-bottom: 32px; }
 .shared-page h1 { overflow-wrap: anywhere; }
 .shared-text { min-height: 60vh; }
+[hidden] { display: none !important; }
+.text-views { margin: 12px 0; }
+.text-views button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.text-preview { border: 1px solid var(--line); border-radius: 6px; padding: 16px; margin: 12px 0; overflow-wrap: anywhere; }
+.text-preview > :first-child { margin-top: 0; }
+.text-preview > :last-child { margin-bottom: 0; }
+.text-preview pre { overflow-x: auto; padding: 12px; background: #f6f8fa; border-radius: 6px; }
+.text-preview pre code.hljs { padding: 0; background: transparent; }
+.text-preview code { font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; }
+.text-preview blockquote { margin-left: 0; padding-left: 16px; border-left: 3px solid var(--line); color: var(--muted); }
+.text-preview .align-left { text-align: left; }
+.text-preview .align-center { text-align: center; }
+.text-preview .align-right { text-align: right; }
+.code-language select { max-width: 100%; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }

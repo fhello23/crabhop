@@ -8,6 +8,7 @@ use crate::db::links::{get_link, Link};
 #[derive(Template)]
 #[template(path = "shared_text.html")]
 struct SharedTextTemplate {
+    slug: String,
     title: String,
     text_content: String,
 }
@@ -83,6 +84,7 @@ pub async fn redirect_slug(
             }
             let mut resp = if let Some(text_content) = resolved.text_content {
                 let template = SharedTextTemplate {
+                    slug: resolved.slug,
                     title: resolved.label.unwrap_or_else(|| "Shared text".to_string()),
                     text_content,
                 };
@@ -123,6 +125,49 @@ pub async fn redirect_slug(
             .into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+/// Download the original UTF-8 bytes, including original line endings. Downloads
+/// are not additional page views and use the same availability checks as shares.
+pub async fn download_text(
+    State(state): State<AppState>,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> Response {
+    let result = async {
+        let link = resolve_redirect(&state, &slug).await?;
+        let text = link.text_content.ok_or(AppError::NotFound)?;
+        let disposition = axum::http::HeaderValue::from_str(&format!(
+            "attachment; filename=\"{}.txt\"",
+            link.slug
+        ))
+        .map_err(AppError::internal)?;
+        Ok::<_, AppError>(
+            (
+                [
+                    (
+                        header::CONTENT_TYPE,
+                        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+                    ),
+                    (header::CONTENT_DISPOSITION, disposition),
+                ],
+                text,
+            )
+                .into_response(),
+        )
+    }
+    .await;
+    let mut response = result.unwrap_or_else(IntoResponse::into_response);
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+    response
+        .headers_mut()
+        .insert("x-robots-tag", "noindex, nofollow".parse().unwrap());
+    response.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        "default-src 'none'; sandbox".parse().unwrap(),
+    );
+    response
 }
 
 async fn resolve_redirect(state: &AppState, slug: &str) -> Result<Link, AppError> {

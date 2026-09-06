@@ -109,8 +109,18 @@ timestamps are rejected instead of being displayed as 1970.
 
 In `/admin`, expand **Share text**, enter your text, and click **Create text link**.
 An optional custom slug, public title, and expiration work just like short links.
-Visitors see a read-only textarea and a **Copy text** button; they can also select
-and copy manually. Only the authenticated administrator can edit the text from
+Visitors start in **Plain text** view, with **Copy text** and **Download as .txt**.
+They can switch to **Markdown preview** (including highlighted fenced code) or
+**Code** with automatic detection and a language selector. Create and edit forms
+offer the same previews alongside the editor. Previews never change the source.
+Raw HTML is displayed as text; images display their alt text without fetching
+remote or local resources. All rendering libraries are pinned and served locally.
+Plain text and downloads remain available without JavaScript. Downloads preserve
+the original UTF-8 bytes and line endings, follow disabled/expired access rules,
+and do not increment view counts. `GET /{slug}/download` (also `HEAD`) returns a
+text attachment for text shares and 404 for redirect links.
+
+Only the authenticated administrator can edit the text from
 its existing link's edit page. Changes appear at the same URL. Disable and
 re-enable work for both link types.
 

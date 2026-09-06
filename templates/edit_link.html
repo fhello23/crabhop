@@ -19,10 +19,12 @@
   <form method="post" action="/admin/links/{{ slug }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% if let Some(text) = text_content %}
-    <label>Shared text
+    <div data-text-share>
+    <label data-text-label>Shared text
       <textarea name="text_content" rows="16" required maxlength="65536">
 {{ text }}</textarea>
     </label>
+    </div>
     <p class="muted"><small>Up to 64 KiB. Visitors can only read and copy. Saving updates the existing shared page.</small></p>
     {% else %}
     <label>Destination URL (http/https)

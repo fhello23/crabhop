@@ -117,6 +117,91 @@ async fn shared_text_lifecycle_and_public_write_protection() {
 }
 
 #[tokio::test]
+async fn text_download_preserves_bytes_and_respects_availability() {
+    let app = setup().await;
+    let text = "\r\n  # Notes 🦀\r\n<script>alert('x')</script>\n\tlast line\r";
+    assert_eq!(
+        api(
+            &app,
+            "POST",
+            "/api/v1/links",
+            json!({
+                "text_content": text, "custom_slug": "download-notes"
+            })
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    let (status, headers, body) = public(&app, "GET", "/DOWNLOAD-NOTES/download").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, text);
+    assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    assert_eq!(
+        headers[header::CONTENT_DISPOSITION],
+        "attachment; filename=\"download-notes.txt\""
+    );
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["x-robots-tag"], "noindex, nofollow");
+    assert_eq!(
+        headers[header::CONTENT_SECURITY_POLICY],
+        "default-src 'none'; sandbox"
+    );
+    let (status, headers, body) = public(&app, "HEAD", "/download-notes/download").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.is_empty());
+    assert!(headers.contains_key(header::CONTENT_DISPOSITION));
+    app.state.analytics.flush().await.unwrap();
+    assert_eq!(
+        api(&app, "GET", "/api/v1/links/download-notes", json!(null))
+            .await
+            .1["total_clicks"],
+        0
+    );
+    common::create_link(
+        &app.state,
+        Some("redirect-only"),
+        "https://example.com",
+        None,
+    )
+    .await;
+    for path in ["/redirect-only/download", "/missing/download"] {
+        let (status, headers, _) = public(&app, "GET", path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    }
+    assert_eq!(
+        public(&app, "POST", "/download-notes/download").await.0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    api(&app, "DELETE", "/api/v1/links/download-notes", json!(null)).await;
+    assert_eq!(
+        public(&app, "GET", "/download-notes/download").await.0,
+        StatusCode::NOT_FOUND
+    );
+    api(
+        &app,
+        "POST",
+        "/api/v1/links/download-notes/enable",
+        json!(null),
+    )
+    .await;
+    sqlx::query("UPDATE links SET expires_at = 1 WHERE slug = 'download-notes'")
+        .execute(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        public(&app, "GET", "/download-notes/download").await.0,
+        StatusCode::GONE
+    );
+    assert_eq!(
+        public(&app, "HEAD", "/download-notes/download").await.0,
+        StatusCode::GONE
+    );
+}
+
+#[tokio::test]
 async fn text_validation_slug_conflicts_and_type_safety() {
     let app = setup().await;
     for body in [

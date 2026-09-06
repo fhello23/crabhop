@@ -47,6 +47,7 @@ pub fn app_router(state: AppState) -> Router {
             tower_http::services::ServeDir::new("static").append_index_html_on_directories(false),
         )
         // Public redirect catch-all (GET + HEAD). Registered last.
+        .route("/{slug}/download", get(public::download_text))
         .route(
             "/{slug}",
             get(public::redirect_slug).head(public::redirect_slug),
