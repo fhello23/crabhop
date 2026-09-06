@@ -2,7 +2,7 @@ mod common;
 
 use axum::http::{header, StatusCode};
 use common::{get_admin_csrf, response_body_string, setup, with_proxy_token};
-use shortener::db::links::{LinkSort, ListParams, StatusFilter};
+use shortener::db::links::{KindFilter, LinkSort, ListParams, StatusFilter};
 use shortener::state::now_millis;
 use tower::ServiceExt;
 
@@ -10,6 +10,7 @@ fn params(status: StatusFilter, sort: LinkSort) -> ListParams {
     ListParams {
         query: None,
         status,
+        kind: KindFilter::All,
         sort,
         page: 1,
         per_page: 20,
@@ -196,6 +197,7 @@ async fn pagination_clamps_past_the_last_page() {
         ListParams {
             query: None,
             status: StatusFilter::All,
+            kind: KindFilter::All,
             sort: LinkSort::Newest,
             page: 99,
             per_page: 20,
@@ -219,6 +221,7 @@ async fn search_combines_with_status_filter() {
         ListParams {
             query: Some("example.com/a".to_string()),
             status: StatusFilter::Active,
+            kind: KindFilter::All,
             sort: LinkSort::Newest,
             page: 1,
             per_page: 20,
@@ -245,6 +248,116 @@ async fn invalid_filter_values_fall_back_on_admin_pages() {
 }
 
 #[tokio::test]
+async fn admin_defaults_to_active_and_all_remains_available() {
+    let app = setup().await;
+    make_links(&app).await;
+    for uri in ["/admin", "/admin?status=", "/admin?status=bogus"] {
+        let req = with_proxy_token(axum::http::Request::builder().uri(uri))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let (status, _, html) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains("value=\"active\" selected"));
+        for slug in ["alpha", "beta"] {
+            assert!(
+                html.contains(&format!("/admin/links/{slug}\"")),
+                "{uri}: missing {slug}"
+            );
+        }
+        for slug in ["old", "off", "offexp"] {
+            assert!(
+                !html.contains(&format!("/admin/links/{slug}\"")),
+                "{uri}: unexpected {slug}"
+            );
+        }
+    }
+    let req = with_proxy_token(axum::http::Request::builder().uri("/admin?status=all"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let (_, _, html) = response_body_string(app.router.oneshot(req).await.unwrap()).await;
+    assert!(html.contains("value=\"all\" selected"));
+    for slug in ["alpha", "beta", "old", "off", "offexp"] {
+        assert!(html.contains(&format!("/admin/links/{slug}\"")));
+    }
+}
+
+async fn create_text(app: &common::TestApp, slug: &str) {
+    shortener::db::links::create_link(
+        &app.state.db,
+        &app.state.config.base_url,
+        shortener::domain::link::CreateLinkInput {
+            text_content: Some("Shared notes".into()),
+            target_url: String::new(),
+            custom_slug: Some(slug.into()),
+            label: None,
+            expires_at: None,
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn type_filters_combine_with_status_search_and_pagination() {
+    let app = setup().await;
+    make_links(&app).await;
+    for i in 0..25 {
+        create_text(&app, &format!("notes-{i:02}")).await;
+    }
+    create_text(&app, "notes-disabled").await;
+    shortener::db::links::set_disabled(&app.state.db, "notes-disabled", true)
+        .await
+        .unwrap();
+    create_text(&app, "unrelated").await;
+    common::create_link(
+        &app.state,
+        Some("notes-url"),
+        "https://example.com/notes",
+        None,
+    )
+    .await;
+
+    let query = "status=active&kind=text&q=notes&sort=slug&per_page=20&page=2";
+    let req = with_proxy_token(axum::http::Request::builder().uri(format!("/admin?{query}")))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let (_, _, html) = response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+    assert!(html.contains("value=\"text\" selected"));
+    assert!(html.contains("items 21–25 of 25"));
+    assert!(html.contains("Page 2 of 2"));
+    assert!(html.contains("kind=text"));
+    assert!(html.contains("page=1"));
+    assert!(!html.contains("/admin/links/notes-url\""));
+    assert!(!html.contains("/admin/links/notes-disabled\""));
+
+    for (query, total, shown) in [
+        (query, 25, 5),
+        ("kind=url", 6, 6),
+        ("kind=text&status=disabled", 1, 1),
+        ("", 33, 20),
+    ] {
+        let req =
+            with_proxy_token(axum::http::Request::builder().uri(format!("/api/v1/links?{query}")))
+                .body(axum::body::Body::empty())
+                .unwrap();
+        let (status, _, body) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["total"], total, "{query}");
+        assert_eq!(result["data"].as_array().unwrap().len(), shown, "{query}");
+    }
+    let req = with_proxy_token(axum::http::Request::builder().uri("/api/v1/links?kind=unknown"))
+        .body(axum::body::Body::empty())
+        .unwrap();
+    assert_eq!(
+        app.router.oneshot(req).await.unwrap().status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
 async fn navigation_preserves_view_state() {
     let app = setup().await;
     for i in 0..25 {
@@ -257,7 +370,8 @@ async fn navigation_preserves_view_state() {
         .await;
     }
     let req = with_proxy_token(
-        axum::http::Request::builder().uri("/admin?status=all&sort=slug&per_page=20"),
+        axum::http::Request::builder()
+            .uri("/admin?status=all&kind=url&q=nav&sort=slug&per_page=20"),
     )
     .body(axum::body::Body::empty())
     .unwrap();
@@ -268,6 +382,7 @@ async fn navigation_preserves_view_state() {
     assert!(body.contains("page=2"), "next link missing: {body}");
     assert!(body.contains("sort=slug"), "sort not preserved");
     assert!(body.contains("status=all"), "status not preserved");
+    assert!(body.contains("kind=url"), "type not preserved");
     assert!(body.contains("per_page=20"), "page size not preserved");
     assert!(body.contains("of 25"), "range total missing");
     assert!(body.contains("Page 1 of 2"), "page indicator missing");
@@ -327,14 +442,16 @@ async fn inline_toggle_returns_to_list_view() {
     let res = app
         .router
         .clone()
-        .oneshot(post_toggle(Some("/admin?status=disabled&per_page=50")))
+        .oneshot(post_toggle(Some(
+            "/admin?status=disabled&kind=url&per_page=50",
+        )))
         .await
         .unwrap();
     let (status, headers, _) = response_body_string(res).await;
     assert_eq!(status, StatusCode::SEE_OTHER);
     assert_eq!(
         headers.get(header::LOCATION).unwrap(),
-        "/admin?status=disabled&per_page=50"
+        "/admin?status=disabled&kind=url&per_page=50"
     );
 
     // Absolute, protocol-relative, and off-admin targets fall back safely.

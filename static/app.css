@@ -33,6 +33,7 @@ th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); v
 .actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 form.inline { display: inline; margin: 0; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.date { white-space: nowrap; }
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .chart { display: flex; align-items: flex-end; gap: 3px; height: 96px; padding: 8px 4px 0; border-bottom: 1px solid var(--line); }
 .chart .bar { flex: 1; min-width: 3px; background: var(--accent); border-radius: 2px 2px 0 0; height: var(--h); }
@@ -42,7 +43,6 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: now
 .activity-data table { margin-top: 12px; }
 .activity-data caption { text-align: left; color: var(--muted); }
 .short-url-row { display: flex; gap: 8px; margin-top: 8px; }
-.footer { margin: 32px auto; }
 
 textarea { display: block; width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 6px; font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--fg); background: var(--bg); resize: vertical; tab-size: 4; }
 textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -133,13 +133,16 @@ analytics. Text pages use `no-store`, `noindex`, and a restrictive CSP.
 - Storage is one row per link per UTC day (`link_daily_clicks`): total
   clicks, last-7-days clicks, last-clicked time, and a zero-filled 30-day
   series. No IP addresses, referrers, or user agents are stored.
-- The admin list shows per-link totals with `All / Active / Expired /
-  Disabled` filters and a `Most clicked` sort; each link's edit page shows
+- The admin list defaults to **Active**, with `All / Active / Expired /
+  Disabled` status filters and `All types / URLs / Shared text` type filters.
+  The Updated column shows `YYYY-MM-DD` in UTC. A `Most clicked` sort is also
+  available; each link's edit page shows
   the activity card with a 30-day chart and an expandable daily-value table
   that works with a keyboard or screen reader.
 - The JSON API returns additive `total_clicks` and `last_clicked_at` fields,
-  and the list endpoint accepts `status` and `sort` with the same values as
-  the admin UI. There is no daily-series endpoint yet.
+  and the list endpoint accepts `status`, `kind=all|url|text`, and `sort`.
+  The API continues to include all statuses and types unless filtered.
+  There is no daily-series endpoint yet.
   A single-link response reports `total_clicks: null` and
   `last_clicked_at: null` when statistics cannot load. Committed creates,
   updates, and enables still return success; a new link reports zero clicks

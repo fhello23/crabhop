@@ -194,6 +194,35 @@ impl StatusFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KindFilter {
+    #[default]
+    All,
+    Url,
+    Text,
+}
+
+impl KindFilter {
+    pub fn from_param(raw: Option<&str>) -> Result<Self, AppError> {
+        match raw.unwrap_or("").trim().to_ascii_lowercase().as_str() {
+            "" | "all" => Ok(Self::All),
+            "url" => Ok(Self::Url),
+            "text" => Ok(Self::Text),
+            other => Err(AppError::Validation(format!(
+                "invalid kind filter {other:?}: expected all|url|text"
+            ))),
+        }
+    }
+
+    pub fn as_param(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Url => "url",
+            Self::Text => "text",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LinkSort {
     #[default]
     Newest,
@@ -232,6 +261,7 @@ impl LinkSort {
 pub struct ListParams {
     pub query: Option<String>,
     pub status: StatusFilter,
+    pub kind: KindFilter,
     pub sort: LinkSort,
     pub page: u32,
     pub per_page: u32,
@@ -347,6 +377,11 @@ pub async fn list_links(pool: &SqlitePool, params: ListParams) -> Result<ListRes
     let status_sql = status_predicate(params.status);
     if !status_sql.is_empty() {
         filters.push(status_sql);
+    }
+    match params.kind {
+        KindFilter::All => {}
+        KindFilter::Url => filters.push("text_content IS NULL"),
+        KindFilter::Text => filters.push("text_content IS NOT NULL"),
     }
     if like_opt.is_some() {
         filters.push("(slug LIKE ? OR target_url LIKE ? OR label LIKE ?)");

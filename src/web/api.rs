@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::analytics::link_stats;
 use crate::db::links::{
-    create_link, get_link, list_links, normalize_pagination, set_disabled, update_link, Link,
-    LinkSort, ListParams, StatusFilter,
+    create_link, get_link, list_links, normalize_pagination, set_disabled, update_link, KindFilter,
+    Link, LinkSort, ListParams, StatusFilter,
 };
 use crate::domain::link::{CreateLinkInput, UpdateLinkInput};
 use crate::error::AppError;
@@ -58,6 +58,7 @@ pub struct ErrorDetail {
 pub struct ApiListQuery {
     pub q: Option<String>,
     pub status: Option<String>,
+    pub kind: Option<String>,
     pub sort: Option<String>,
     pub page: Option<i64>,
     pub per_page: Option<i64>,
@@ -202,6 +203,10 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
         Ok(s) => s,
         Err(e) => return json_error(e),
     };
+    let kind = match KindFilter::from_param(q.kind.as_deref()) {
+        Ok(kind) => kind,
+        Err(e) => return json_error(e),
+    };
     let sort = match LinkSort::from_param(q.sort.as_deref()) {
         Ok(s) => s,
         Err(e) => return json_error(e),
@@ -211,6 +216,7 @@ pub async fn api_list(State(state): State<AppState>, Query(q): Query<ApiListQuer
         ListParams {
             query: q.q.filter(|s| !s.trim().is_empty()),
             status,
+            kind,
             sort,
             page,
             per_page,

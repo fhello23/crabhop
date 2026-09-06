@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::analytics::{get_link_activity, DailyClickPoint, LinkActivitySummary};
 use crate::db::links::{
-    create_link, get_link, list_links, normalize_pagination, set_disabled, update_link,
+    create_link, get_link, list_links, normalize_pagination, set_disabled, update_link, KindFilter,
     LinkListItem, LinkSort, ListParams, StatusFilter,
 };
 use crate::domain::link::CreateLinkInput;
@@ -35,6 +35,7 @@ struct LinksTemplate {
     error: Option<String>,
     query: String,
     status: String,
+    kind: String,
     sort: String,
     links: Vec<LinkRow>,
     page: u32,
@@ -106,6 +107,8 @@ pub struct AdminListQuery {
     q: Option<String>,
     #[serde(default)]
     status: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     sort: Option<String>,
     #[serde(default)]
@@ -233,7 +236,11 @@ fn to_row(state: &AppState, item: LinkListItem, now: i64) -> LinkRow {
         label: item.link.label.clone(),
         total_clicks: item.total_clicks,
         created_at: millis_to_rfc3339(item.link.created_at),
-        updated_at: millis_to_rfc3339(item.link.updated_at),
+        updated_at: millis_to_rfc3339(item.link.updated_at)
+            .split('T')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
         expires_at: item.link.expires_at.map(millis_to_rfc3339),
         disabled: item.link.is_disabled(),
         expired: item.link.is_expired(now),
@@ -247,6 +254,7 @@ struct ListNav<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     q: Option<&'a str>,
     status: &'a str,
+    kind: &'a str,
     sort: &'a str,
     per_page: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -258,6 +266,7 @@ struct ListNav<'a> {
 fn list_url(
     q: &str,
     status: StatusFilter,
+    kind: KindFilter,
     sort: LinkSort,
     per_page: u32,
     page: Option<u32>,
@@ -265,6 +274,7 @@ fn list_url(
     let nav = ListNav {
         q: if q.trim().is_empty() { None } else { Some(q) },
         status: status.as_param(),
+        kind: kind.as_param(),
         sort: sort.as_param(),
         per_page,
         page,
@@ -390,7 +400,11 @@ pub async fn admin_list_with_created(
         .created
         .as_deref()
         .and_then(|slug| crate::domain::link::normalize_custom_slug(slug).ok());
-    let status = StatusFilter::from_param(params.status.as_deref()).unwrap_or_default();
+    let status = match params.status.as_deref().map(str::trim) {
+        None | Some("") => StatusFilter::Active,
+        Some(raw) => StatusFilter::from_param(Some(raw)).unwrap_or(StatusFilter::Active),
+    };
+    let kind = KindFilter::from_param(params.kind.as_deref()).unwrap_or_default();
     let sort = LinkSort::from_param(params.sort.as_deref()).unwrap_or_default();
     let (page, per_page) = normalize_pagination(params.page, params.per_page);
     let now = now_millis();
@@ -404,6 +418,7 @@ pub async fn admin_list_with_created(
                 Some(q.clone())
             },
             status,
+            kind,
             sort,
             page,
             per_page,
@@ -436,6 +451,7 @@ pub async fn admin_list_with_created(
                 error: None,
                 query: q.clone(),
                 status: status.as_param().to_string(),
+                kind: kind.as_param().to_string(),
                 sort: sort.as_param().to_string(),
                 links: rows,
                 page: result.page,
@@ -445,10 +461,10 @@ pub async fn admin_list_with_created(
                 range_start,
                 range_end,
                 prev_url: (result.page > 1)
-                    .then(|| list_url(&q, status, sort, per_page, Some(result.page - 1))),
+                    .then(|| list_url(&q, status, kind, sort, per_page, Some(result.page - 1))),
                 next_url: (result.page < total_pages.max(1))
-                    .then(|| list_url(&q, status, sort, per_page, Some(result.page + 1))),
-                list_url: list_url(&q, status, sort, per_page, Some(result.page)),
+                    .then(|| list_url(&q, status, kind, sort, per_page, Some(result.page + 1))),
+                list_url: list_url(&q, status, kind, sort, per_page, Some(result.page)),
             };
             render_with_cookie(tpl, set_cookie)
         }
@@ -485,7 +501,8 @@ async fn render_list_with_error(
 ) -> Response {
     // Error pages fall back to the default view; the transient message is
     // what matters, not the previous filter state.
-    let status_filter = StatusFilter::All;
+    let status_filter = StatusFilter::Active;
+    let kind = KindFilter::All;
     let sort = LinkSort::Newest;
     let (page, per_page) = normalize_pagination(None, None);
     let now = now_millis();
@@ -498,6 +515,7 @@ async fn render_list_with_error(
                 Some(query.clone())
             },
             status: status_filter,
+            kind,
             sort,
             page,
             per_page,
@@ -522,6 +540,7 @@ async fn render_list_with_error(
         error: Some(message),
         query,
         status: status_filter.as_param().to_string(),
+        kind: kind.as_param().to_string(),
         sort: sort.as_param().to_string(),
         links: rows,
         page,
@@ -532,7 +551,7 @@ async fn render_list_with_error(
         range_end: 0,
         prev_url: None,
         next_url: None,
-        list_url: list_url("", status_filter, sort, per_page, Some(page)),
+        list_url: list_url("", status_filter, kind, sort, per_page, Some(page)),
     };
     match tpl.render() {
         Ok(html) => {
