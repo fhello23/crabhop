@@ -44,6 +44,33 @@
 </section>
 
 <section class="card">
+  <details {% if draft.text_content.is_some() %}open{% endif %}>
+    <summary class="create-text-heading">Share text</summary>
+    <p class="muted">Create a page anyone with the link can read and copy. Only you can edit it from the admin area.</p>
+    <form method="post" action="/admin/links">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Text to share
+        <textarea name="text_content" rows="10" required maxlength="65536" aria-describedby="text-limit" placeholder="Paste or write your text here…">
+{% if let Some(text) = draft.text_content %}{{ text }}{% endif %}</textarea>
+      </label>
+      <p id="text-limit" class="muted"><small>Plain text, up to 64 KiB. Formatting and line breaks are preserved.</small></p>
+      <div class="grid">
+        <label>Custom slug (optional, 3–64: a-z 0-9 _ -)
+          <input type="text" name="custom_slug" minlength="3" maxlength="64" placeholder="my-notes" value="{% if let Some(value) = draft.custom_slug %}{{ value }}{% endif %}">
+        </label>
+        <label>Expires in UTC (optional)
+          <input type="datetime-local" name="expires_at" value="{% if let Some(value) = draft.expires_at %}{{ value }}{% endif %}">
+        </label>
+      </div>
+      <label>Title (optional, visible to visitors)
+        <input type="text" name="label" maxlength="256" placeholder="Meeting notes" value="{% if let Some(value) = draft.label %}{{ value }}{% endif %}">
+      </label>
+      <button type="submit">Create text link</button>
+    </form>
+  </details>
+</section>
+
+<section class="card">
   <h2>Existing links</h2>
   <form method="get" action="/admin" class="filter-row">
     <input type="search" name="q" value="{{ query }}" placeholder="Search slug, URL, label" aria-label="Search links">
@@ -77,7 +104,7 @@
   <div class="table-wrap">
   <table>
     <thead>
-      <tr><th>Slug</th><th>Destination</th><th>Clicks</th><th>Status</th><th>Updated</th><th>Actions</th></tr>
+      <tr><th>Slug</th><th>Destination / type</th><th>Clicks</th><th>Status</th><th>Updated</th><th>Actions</th></tr>
     </thead>
     <tbody>
     {% for l in links %}

@@ -21,6 +21,7 @@ use crate::web::security::{check_api_mutation_headers, require_json_content_type
 
 #[derive(Debug, Serialize)]
 pub struct LinkResponse {
+    pub text_content: Option<String>,
     pub slug: String,
     pub short_url: String,
     pub target_url: String,
@@ -65,6 +66,8 @@ pub struct ApiListQuery {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiCreateBody {
+    pub text_content: Option<String>,
+    #[serde(default)]
     pub target_url: String,
     #[serde(default)]
     pub custom_slug: Option<String>,
@@ -77,6 +80,7 @@ pub struct ApiCreateBody {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApiPatchBody {
+    pub text_content: Option<String>,
     #[serde(default)]
     pub target_url: Option<String>,
     #[serde(default, deserialize_with = "opt_opt_string")]
@@ -142,6 +146,7 @@ fn to_response(
         short_url: state.short_url(&link.slug),
         slug: link.slug.clone(),
         target_url: link.target_url.clone(),
+        text_content: link.text_content.clone(),
         label: link.label.clone(),
         created_at: millis_to_rfc3339(link.created_at),
         updated_at: millis_to_rfc3339(link.updated_at),
@@ -180,7 +185,7 @@ async fn read_json_body<T: serde::de::DeserializeOwned>(
     body: axum::body::Bytes,
 ) -> Result<T, AppError> {
     require_json_content_type(headers)?;
-    if body.len() > 16 * 1024 {
+    if body.len() > crate::web::MAX_REQUEST_BYTES {
         return Err(AppError::PayloadTooLarge);
     }
     serde_json::from_slice::<T>(&body)
@@ -264,6 +269,7 @@ pub async fn api_create(
     };
     let input = CreateLinkInput {
         target_url: parsed.target_url,
+        text_content: parsed.text_content,
         custom_slug: parsed.custom_slug.filter(|s| !s.trim().is_empty()),
         label: parsed.label.filter(|s| !s.trim().is_empty()),
         expires_at,
@@ -311,13 +317,19 @@ pub async fn api_patch(
     };
     let input = UpdateLinkInput {
         target_url: parsed.target_url,
+        text_content: parsed.text_content,
         label: parsed.label,
         expires_at,
     };
     // Reject empty patch (no updatable fields present).
-    if input.target_url.is_none() && input.label.is_none() && input.expires_at.is_none() {
+    if input.target_url.is_none()
+        && input.text_content.is_none()
+        && input.label.is_none()
+        && input.expires_at.is_none()
+    {
         return json_error(AppError::Validation(
-            "patch body must include at least one of: target_url, label, expires_at".to_string(),
+            "patch body must include at least one of: target_url, text_content, label, expires_at"
+                .to_string(),
         ));
     }
     match update_link(&state.db, &state.config.base_url, &slug, input).await {

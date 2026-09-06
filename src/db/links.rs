@@ -4,8 +4,8 @@ use sqlx::{FromRow, SqlitePool};
 use uuid::Uuid;
 
 use crate::domain::link::{
-    generate_slug, normalize_custom_slug, validate_label, validate_target_url, CreateLinkInput,
-    UpdateLinkInput, MAX_CREATE_RETRIES,
+    generate_slug, normalize_custom_slug, validate_expiration, validate_label, validate_target_url,
+    validate_text_content, CreateLinkInput, UpdateLinkInput, MAX_CREATE_RETRIES,
 };
 use crate::error::{is_unique_violation, AppError};
 use crate::state::now_millis;
@@ -16,6 +16,7 @@ pub struct Link {
     pub id: String,
     pub slug: String,
     pub target_url: String,
+    pub text_content: Option<String>,
     pub label: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -48,39 +49,75 @@ pub async fn create_link(
     base_url: &Url,
     input: CreateLinkInput,
 ) -> Result<Link, AppError> {
-    let target_url = validate_target_url(&input.target_url, base_url)?;
-    let label = validate_label(input.label.as_deref())?;
-
-    if let Some(exp) = input.expires_at {
-        if exp <= now_millis() {
+    let target_url = if let Some(text) = &input.text_content {
+        if !input.target_url.is_empty() {
             return Err(AppError::Validation(
-                "expires_at must be in the future".to_string(),
+                "provide either target_url or text_content, not both".to_string(),
             ));
         }
-    }
+        validate_text_content(text)?;
+        String::new()
+    } else {
+        validate_target_url(&input.target_url, base_url)?
+    };
+    let label = validate_label(input.label.as_deref())?;
+
+    validate_expiration(input.expires_at, now_millis())?;
 
     // Custom slug path: single attempt, conflict surfaces as 409.
     if let Some(raw) = input.custom_slug {
         if raw.trim().is_empty() {
             // Treat empty custom slug as "generate one".
-            return create_with_generated_slug(pool, target_url, label, input.expires_at).await;
+            return create_with_generated_slug(
+                pool,
+                target_url,
+                input.text_content,
+                label,
+                input.expires_at,
+            )
+            .await;
         }
         let slug = normalize_custom_slug(&raw)?;
-        return insert_link(pool, slug, target_url, label, input.expires_at).await;
+        return insert_link(
+            pool,
+            slug,
+            target_url,
+            input.text_content,
+            label,
+            input.expires_at,
+        )
+        .await;
     }
 
-    create_with_generated_slug(pool, target_url, label, input.expires_at).await
+    create_with_generated_slug(
+        pool,
+        target_url,
+        input.text_content,
+        label,
+        input.expires_at,
+    )
+    .await
 }
 
 async fn create_with_generated_slug(
     pool: &SqlitePool,
     target_url: String,
+    text_content: Option<String>,
     label: Option<String>,
     expires_at: Option<i64>,
 ) -> Result<Link, AppError> {
     for _ in 0..MAX_CREATE_RETRIES {
         let slug = generate_slug();
-        match insert_link(pool, slug, target_url.clone(), label.clone(), expires_at).await {
+        match insert_link(
+            pool,
+            slug,
+            target_url.clone(),
+            text_content.clone(),
+            label.clone(),
+            expires_at,
+        )
+        .await
+        {
             Err(AppError::Conflict) => continue,
             other => return other,
         }
@@ -94,27 +131,29 @@ async fn insert_link(
     pool: &SqlitePool,
     slug: String,
     target_url: String,
+    text_content: Option<String>,
     label: Option<String>,
     expires_at: Option<i64>,
 ) -> Result<Link, AppError> {
     let now = now_millis();
     let id = Uuid::new_v4().to_string();
-    let res = sqlx::query(
-        "INSERT INTO links (id, slug, target_url, label, created_at, updated_at, expires_at, disabled_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+    let res = sqlx::query_as::<_, Link>(
+        "INSERT INTO links (id, slug, target_url, text_content, label, created_at, updated_at, expires_at, disabled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL) RETURNING *",
     )
     .bind(&id)
     .bind(&slug)
     .bind(&target_url)
+    .bind(&text_content)
     .bind(&label)
     .bind(now)
     .bind(now)
     .bind(expires_at)
-    .execute(pool)
+    .fetch_one(pool)
     .await;
 
     match res {
-        Ok(_) => get_link(pool, &slug).await,
+        Ok(link) => Ok(link),
         Err(e) if is_unique_violation(&e) => Err(AppError::Conflict),
         Err(e) => Err(AppError::from(e)),
     }
@@ -221,6 +260,7 @@ struct LinkListRow {
     id: String,
     slug: String,
     target_url: String,
+    text_content: Option<String>,
     label: Option<String>,
     created_at: i64,
     updated_at: i64,
@@ -237,6 +277,7 @@ impl From<LinkListRow> for LinkListItem {
                 id: r.id,
                 slug: r.slug,
                 target_url: r.target_url,
+                text_content: r.text_content,
                 label: r.label,
                 created_at: r.created_at,
                 updated_at: r.updated_at,
@@ -361,58 +402,67 @@ pub async fn update_link(
     input: UpdateLinkInput,
 ) -> Result<Link, AppError> {
     let existing = get_link(pool, slug).await?;
-    let mut target_url = existing.target_url.clone();
-    let mut label = existing.label.clone();
-    let mut expires_at = existing.expires_at;
-
-    if let Some(raw) = input.target_url {
-        target_url = validate_target_url(&raw, base_url)?;
+    // Link types are immutable: editing must not silently replace a redirect
+    // with a text page (or vice versa).
+    if (existing.text_content.is_some() && input.target_url.is_some())
+        || (existing.text_content.is_none() && input.text_content.is_some())
+    {
+        return Err(AppError::Validation(
+            "link type cannot be changed".to_string(),
+        ));
     }
-    if let Some(label_in) = input.label {
-        label = validate_label(label_in.as_deref())?;
+    if let Some(text) = &input.text_content {
+        validate_text_content(text)?;
     }
-    if let Some(exp_in) = input.expires_at {
-        expires_at = exp_in;
-        if let Some(e) = expires_at {
-            if e <= now_millis() {
-                return Err(AppError::Validation(
-                    "expires_at must be in the future".to_string(),
-                ));
-            }
-        }
+    let target_url = input
+        .target_url
+        .as_deref()
+        .map(|raw| validate_target_url(raw, base_url))
+        .transpose()?;
+    let label = input
+        .label
+        .as_ref()
+        .map(|raw| validate_label(raw.as_deref()))
+        .transpose()?;
+    if let Some(expiry) = input.expires_at {
+        validate_expiration(expiry, now_millis())?;
     }
 
     let now = now_millis();
-    sqlx::query(
-        "UPDATE links SET target_url = ?, label = ?, expires_at = ?, updated_at = ? WHERE slug = ?",
+    // Only write fields present in this patch. Copying omitted fields from
+    // `existing` would overwrite another request's concurrent changes.
+    // RETURNING also avoids a separate, fallible lookup after the commit.
+    sqlx::query_as::<_, Link>(
+        "UPDATE links SET
+            target_url = COALESCE(?, target_url),
+            text_content = COALESCE(?, text_content),
+            label = CASE WHEN ? THEN ? ELSE label END,
+            expires_at = CASE WHEN ? THEN ? ELSE expires_at END,
+            updated_at = ?
+         WHERE slug = ? RETURNING *",
     )
     .bind(&target_url)
-    .bind(&label)
-    .bind(expires_at)
+    .bind(&input.text_content)
+    .bind(label.is_some())
+    .bind(label.flatten())
+    .bind(input.expires_at.is_some())
+    .bind(input.expires_at.flatten())
     .bind(now)
     .bind(existing.slug.clone())
-    .execute(pool)
-    .await?;
-
-    get_link(pool, &existing.slug).await
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)
 }
 
 pub async fn set_disabled(pool: &SqlitePool, slug: &str, disabled: bool) -> Result<Link, AppError> {
-    let existing = get_link(pool, slug).await?;
     let now = now_millis();
-    if disabled {
-        sqlx::query("UPDATE links SET disabled_at = ?, updated_at = ? WHERE slug = ?")
-            .bind(now)
-            .bind(now)
-            .bind(&existing.slug)
-            .execute(pool)
-            .await?;
-    } else {
-        sqlx::query("UPDATE links SET disabled_at = NULL, updated_at = ? WHERE slug = ?")
-            .bind(now)
-            .bind(&existing.slug)
-            .execute(pool)
-            .await?;
-    }
-    get_link(pool, &existing.slug).await
+    sqlx::query_as::<_, Link>(
+        "UPDATE links SET disabled_at = ?, updated_at = ? WHERE slug = ? RETURNING *",
+    )
+    .bind(disabled.then_some(now))
+    .bind(now)
+    .bind(slug.to_ascii_lowercase())
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound)
 }

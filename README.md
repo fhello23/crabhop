@@ -94,7 +94,7 @@ GET   /api/v1/links/{slug}
 PATCH /api/v1/links/{slug}     at least one of target_url/label/expires_at
 DELETE /api/v1/links/{slug}    soft-disable → 204
 POST  /api/v1/links/{slug}/enable
-GET   /{slug} / HEAD /{slug}   302 active / 404 unknown+disabled / 410 expired
+GET   /{slug} / HEAD /{slug}   302 redirect / 200 shared text / 404 unknown+disabled / 410 expired
 ```
 
 Redirects carry `Cache-Control: no-store` + `X-Robots-Tag: noindex, nofollow`.
@@ -102,10 +102,33 @@ API errors are `{"error":{"message":"…","code":NNN}}`; `deny_unknown_fields` i
 `expires_at` must be in the future and accepts RFC 3339
 (`2026-12-31T23:59:59Z`) or Unix millis. Admin date fields are explicitly UTC
 and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
+Expiration values must fit an RFC 3339 date (through year 9999); out-of-range
+timestamps are rejected instead of being displayed as 1970.
+
+### Shared text
+
+In `/admin`, expand **Share text**, enter your text, and click **Create text link**.
+An optional custom slug, public title, and expiration work just like short links.
+Visitors see a read-only textarea and a **Copy text** button; they can also select
+and copy manually. Only the authenticated administrator can edit the text from
+its existing link's edit page. Changes appear at the same URL. Disable and
+re-enable work for both link types.
+
+The API accepts `text_content` instead of `target_url` on `POST /api/v1/links`,
+for example `{"text_content":"Hello\nworld", "custom_slug":"notes"}`. Update it
+with `PATCH /api/v1/links/notes` and `{"text_content":"Updated notes"}`.
+Responses include `text_content` (null for redirects); text shares have an empty
+`target_url`. A link's type cannot be changed after creation. Both types share
+one slug namespace. Text must be nonblank, contain no null characters, and fit
+within 64 KiB of UTF-8; content is stored without trimming and rendered as plain
+text. Request bodies allow 512 KiB to accommodate JSON/form escaping.
+
+The additive SQLite migration runs at startup and preserves existing links and
+analytics. Text pages use `no-store`, `noindex`, and a restrictive CSP.
 
 ### Link activity
 
-- Only successful public `GET` redirects are counted. `HEAD`, unknown,
+- Successful public `GET` redirects and text page views are counted. `HEAD`, unknown,
   disabled, and expired requests never increment a counter.
 - Storage is one row per link per UTC day (`link_daily_clicks`): total
   clicks, last-7-days clicks, last-clicked time, and a zero-filled 30-day
@@ -142,14 +165,23 @@ and accept `datetime-local` (`YYYY-MM-DDTHH:MM`).
 - API mutations: require `Content-Type: application/json` + `X-Requested-With`
   header; no CORS headers are ever emitted.
 - Headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `Referrer-Policy: same-origin`, restrictive CSP on `/admin`.
+  `Referrer-Policy: no-referrer`, restrictive CSP on `/admin`.
   Every `/admin` and `/api` response carries `Cache-Control: no-store` so
   private link data is never retained in browser caches.
 - Production HTTPS responses carry
   `Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`, no
   preload — add them only after review).
-- Body cap 16 KiB, 10 s timeout, Askama auto-escaping, no credential/URL logging,
+- Body cap 512 KiB, 10 s timeout, Askama auto-escaping, no credential/URL logging,
   non-root read-only container (writable `/data` only).
+- App request logs contain route patterns, never literal slugs or query strings.
+  Caddy access and proxy-error logs redact URI paths/queries and omit request
+  and response headers. Access logs still retain client IPs for fail2ban;
+  this is separate from the visitor-free analytics database. Existing logs
+  are not retroactively redacted, and any proxy in front of Caddy needs its
+  own logging policy.
+- Anyone with a share URL can read it. Custom slugs can be guessed; disabling
+  or expiring a share prevents future access but does not erase its database
+  row, backups, or copies already made by visitors.
 
 ## Production deployment
 
@@ -194,8 +226,10 @@ any working directory:
 
 The script refuses tracked local changes, pulls with `git pull --ff-only`,
 rebuilds the Rust image, recreates changed services, waits for both internal and
-public readiness, and restores the previous application image if verification
-fails. After a successful deployment it deletes previous and dangling Crabhop
+public readiness, and attempts to restore the previous application image if
+verification fails. This is an image rollback only: it does not restore the
+database or previous Compose/Caddy configuration. See the migration limitation
+below before upgrading. After a successful deployment it deletes previous and dangling Crabhop
 images by their image ID/label. It does not run a global Docker prune and cannot
 remove images or volumes belonging to other applications on the VPS.
 
@@ -213,11 +247,18 @@ CRABHOP_DIR=/srv/crabhop /usr/local/bin/deploy-crabhop
 ## Upgrade / rollback
 
 - Upgrade with `scripts/deploy-vps.sh`; it temporarily preserves the running
-  image and restores it automatically if startup or readiness verification fails.
+  image and attempts to restore it if startup or readiness verification fails.
 - After a successful deployment the previous image is deleted as part of the
   requested cleanup. To return to an older release later, revert that Git commit,
   push the revert, and run the deployment script again.
-- SQLite migrations run at startup and are backwards-compatible (additive only).
+- SQLite migrations run at startup and currently add schema without removing
+  existing data. This does **not** guarantee binary rollback compatibility:
+  SQLx rejects applied migrations absent from an older binary. In particular,
+  a binary from before `0003_add_shared_text.sql` can refuse to start after
+  that migration runs. Keep and verify a pre-upgrade SQLite backup and the
+  matching release configuration before a migration-bearing upgrade. Restoring
+  that backup discards later writes, so plan a maintenance window and a tested
+  restore procedure; the deployment script does not automate this safely yet.
 - Dependabot proposes weekly Cargo and container-image updates as pull requests.
   Before deploying an image bump, review the new image's vulnerability report,
   update the digest pin, and let CI rebuild and re-verify.
@@ -261,6 +302,7 @@ cargo test --all-features
 cargo audit            # honors .cargo/audit.toml (dated, scoped ignores only)
 docker build .
 compose startup + Caddy authentication smoke test (scripts/smoke-caddy-auth.sh),
+log-redaction smoke test (scripts/smoke-log-privacy.py),
 an end-to-end link lifecycle through the proxy, and a check that port 3000
 is not published
 ```

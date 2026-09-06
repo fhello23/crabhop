@@ -364,8 +364,11 @@ async fn api_conflict_on_duplicate_slug() {
 #[tokio::test]
 async fn api_rejects_oversized_body() {
     let app = setup().await;
-    // 16 KiB cap: a 20 KiB JSON body must be rejected with 413.
-    let big_target = format!("https://example.com/{}", "a".repeat(20 * 1024));
+    // The request body cap also covers encoded shared text.
+    let big_target = format!(
+        "https://example.com/{}",
+        "a".repeat(shortener::web::MAX_REQUEST_BYTES)
+    );
     let body = format!(r#"{{"target_url":"{big_target}"}}"#);
     let res = app
         .router

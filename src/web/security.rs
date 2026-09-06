@@ -212,7 +212,16 @@ pub fn require_json_content_type(headers: &HeaderMap) -> Result<(), crate::error
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
     {
-        Some(ct) if ct.starts_with("application/json") => Ok(()),
+        Some(ct)
+            if ct
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .eq_ignore_ascii_case("application/json") =>
+        {
+            Ok(())
+        }
         _ => Err(crate::error::AppError::UnsupportedMediaType(
             "Content-Type must be application/json".to_string(),
         )),
@@ -235,7 +244,7 @@ pub async fn security_headers_mw(
     if let Ok(v) = "DENY".parse() {
         headers.insert(header::X_FRAME_OPTIONS, v);
     }
-    if let Ok(v) = "same-origin".parse() {
+    if let Ok(v) = "no-referrer".parse() {
         headers.insert(header::REFERRER_POLICY, v);
     }
     if is_management_path(&path) {
@@ -248,7 +257,7 @@ pub async fn security_headers_mw(
     if path.starts_with("/admin") {
         if let Ok(v) = "default-src 'self'; style-src 'self' 'unsafe-inline'; \
              script-src 'self'; img-src 'self' data:; object-src 'none'; \
-             base-uri 'self'; frame-ancestors 'deny'; form-action 'self'"
+             base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
             .parse()
         {
             headers.insert(header::CONTENT_SECURITY_POLICY, v);

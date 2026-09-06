@@ -1,4 +1,19 @@
+(private-log) {
+	format filter {
+		wrap json
+		fields {
+			request>uri regexp "^(?:(/(?:admin|api))(?:[/?].*)?|.*)$" "$1/[redacted]"
+			request>headers delete
+			resp_headers delete
+		}
+	}
+}
+
 {
+	# Apply the same redaction to runtime error logs (e.g. proxy failures).
+	log default {
+		import private-log
+	}
 	servers {
 		trusted_proxies static 172.16.0.0/12 127.0.0.1
 		trusted_proxies_strict
@@ -13,7 +28,9 @@
 			roll_keep 10
 			roll_keep_for 720h
 		}
-		format json
+		# Share URLs are bearer links. Keep operational counts and client_ip
+		# for fail2ban without persisting slugs, searches, or header contents.
+		import private-log
 	}
 
 	@management path /admin /admin/* /api /api/*

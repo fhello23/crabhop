@@ -143,6 +143,7 @@ async fn reserved_routes_win_over_slug_lookup() {
     let base: url::Url = "http://localhost".parse().unwrap();
     for reserved in ["admin", "api", "health", "static", "assets"] {
         let input = shortener::domain::link::CreateLinkInput {
+            text_content: None,
             target_url: "https://example.com/ok".to_string(),
             custom_slug: Some(reserved.to_string()),
             label: None,

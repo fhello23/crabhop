@@ -59,6 +59,7 @@ pub async fn create_link(
     expires_at: Option<i64>,
 ) -> String {
     let input = CreateLinkInput {
+        text_content: None,
         target_url: target.to_string(),
         custom_slug: slug.map(|s| s.to_string()),
         label: None,

@@ -132,7 +132,7 @@ else
   attempt=1
   public_ready=false
   while [ "$attempt" -le "$HEALTH_ATTEMPTS" ]; do
-    if curl --fail --silent --show-error "$public_health_url" >/dev/null 2>&1; then
+    if curl --fail --silent --show-error --connect-timeout 5 --max-time 10 "$public_health_url" >/dev/null 2>&1; then
       public_ready=true
       break
     fi

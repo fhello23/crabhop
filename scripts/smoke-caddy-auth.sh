@@ -16,7 +16,7 @@ fi
 expect_status() {
   expected="$1"
   shift
-  actual="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$@")"
+  actual="$(curl --silent --show-error --connect-timeout 5 --max-time 10 --output /dev/null --write-out '%{http_code}' "$@")"
   if [ "$actual" != "$expected" ]; then
     echo "expected HTTP $expected, received $actual" >&2
     exit 1

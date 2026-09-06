@@ -126,6 +126,10 @@ jobs:
           echo
           CODE="$(curl --silent --output /dev/null --write-out '%{http_code}' "http://localhost:8080/$SLUG")"
           test "$CODE" = "302"
+      - name: Caddy log privacy smoke test
+        run: |
+          export SMOKE_CADDY_CONTAINER="$(docker compose ps -q caddy)"
+          ADMIN_PASSWORD='ci-admin-pass' python3 scripts/smoke-log-privacy.py http://localhost:8080
       - name: Application port must not be published
         run: |
           set -eu

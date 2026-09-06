@@ -10,6 +10,51 @@ use crate::error::AppError;
 pub const SLUG_ALPHABET: &[u8] = b"23456789abcdefghjkmnpqrstuvwxyz";
 pub const GENERATED_SLUG_LEN: usize = 10;
 pub const MAX_CREATE_RETRIES: u32 = 10;
+pub const MAX_TEXT_BYTES: usize = 64 * 1024;
+
+/// Keep expiry values representable in the API's RFC 3339 output and UI.
+pub fn validate_expiration(expires_at: Option<i64>, now: i64) -> Result<(), AppError> {
+    if let Some(expiry) = expires_at {
+        if expiry <= now {
+            return Err(AppError::Validation(
+                "expires_at must be in the future".to_string(),
+            ));
+        }
+        let valid = time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(expiry) * 1_000_000)
+            .ok()
+            .and_then(|dt| {
+                dt.format(&time::format_description::well_known::Rfc3339)
+                    .ok()
+            })
+            .is_some();
+        if !valid {
+            return Err(AppError::Validation(
+                "expires_at must be a representable RFC 3339 date (year 0000–9999)".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validate plain text without trimming the shared content.
+pub fn validate_text_content(text: &str) -> Result<(), AppError> {
+    if text.trim().is_empty() {
+        return Err(AppError::Validation(
+            "shared text must not be empty".to_string(),
+        ));
+    }
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(AppError::Validation(
+            "shared text must be at most 64 KiB".to_string(),
+        ));
+    }
+    if text.contains('\0') {
+        return Err(AppError::Validation(
+            "shared text must not contain null characters".to_string(),
+        ));
+    }
+    Ok(())
+}
 
 pub const RESERVED_SLUGS: &[&str] = &[
     "admin",
@@ -25,6 +70,7 @@ pub const RESERVED_SLUGS: &[&str] = &[
 
 #[derive(Debug, Clone)]
 pub struct CreateLinkInput {
+    pub text_content: Option<String>,
     pub target_url: String,
     pub custom_slug: Option<String>,
     pub label: Option<String>,
@@ -33,6 +79,7 @@ pub struct CreateLinkInput {
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateLinkInput {
+    pub text_content: Option<String>,
     pub target_url: Option<String>,
     pub label: Option<Option<String>>,
     pub expires_at: Option<Option<i64>>,

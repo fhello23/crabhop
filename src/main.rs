@@ -44,8 +44,8 @@ fn init_tracing(config: &Config) {
     use tracing_subscriber::{fmt, EnvFilter};
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     let env_filter = EnvFilter::try_new(filter).unwrap_or_else(|_| EnvFilter::new("info"));
-    // NOTE: request middleware logs method/path/status only. Authorization,
-    // Cookie, CSRF tokens, and destination URLs are never logged.
+    // Request middleware logs method/route pattern/status only. Share slugs,
+    // query strings, headers, and destination URLs are excluded.
     if config.env.is_production() {
         fmt()
             .json()

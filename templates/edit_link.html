@@ -14,14 +14,22 @@
 {% endif %}
 
 <section class="card">
-  <h2>Destination &amp; expiration</h2>
+  <h2>Content &amp; expiration</h2>
   <p class="muted"><small>Slugs are immutable. To rename, create a new link and disable this one.</small></p>
   <form method="post" action="/admin/links/{{ slug }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if let Some(text) = text_content %}
+    <label>Shared text
+      <textarea name="text_content" rows="16" required maxlength="65536">
+{{ text }}</textarea>
+    </label>
+    <p class="muted"><small>Up to 64 KiB. Visitors can only read and copy. Saving updates the existing shared page.</small></p>
+    {% else %}
     <label>Destination URL (http/https)
       <input type="url" name="target_url" required maxlength="4096" value="{{ target_url }}">
     </label>
-    <label>Label (optional)
+    {% endif %}
+    <label>{% if text_content.is_some() %}Title (optional, visible to visitors){% else %}Label (optional){% endif %}
       <input type="text" name="label" maxlength="256" value="{{ label }}">
     </label>
     <label>Expires in UTC (optional, empty = never)
@@ -51,7 +59,7 @@
       </tbody>
     </table>
   </details>
-  <p class="muted"><small>Successful public GET redirects only, aggregated per UTC day. No visitor data is stored.</small></p>
+  <p class="muted"><small>Successful public GET redirects and text views only, aggregated per UTC day. No visitor data is stored.</small></p>
 </section>
 
 <section class="card">

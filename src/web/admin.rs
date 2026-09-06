@@ -26,6 +26,7 @@ use crate::web::security::{
 #[template(path = "links.html")]
 #[allow(dead_code)]
 struct LinksTemplate {
+    draft: CreateForm,
     title: String,
     brand_host: String,
     csrf_token: String,
@@ -65,6 +66,7 @@ struct LinkRow {
 #[derive(Template)]
 #[template(path = "edit_link.html")]
 struct EditTemplate {
+    text_content: Option<String>,
     title: String,
     brand_host: String,
     csrf_token: String,
@@ -114,8 +116,9 @@ pub struct AdminListQuery {
     created: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct CreateForm {
+    pub text_content: Option<String>,
     pub target_url: Option<String>,
     pub custom_slug: Option<String>,
     pub label: Option<String>,
@@ -125,6 +128,7 @@ pub struct CreateForm {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateForm {
+    pub text_content: Option<String>,
     pub target_url: Option<String>,
     pub label: Option<String>,
     pub expires_at: Option<String>,
@@ -221,7 +225,11 @@ fn to_row(state: &AppState, item: LinkListItem, now: i64) -> LinkRow {
     LinkRow {
         short_url: state.short_url(&item.link.slug),
         slug: item.link.slug.clone(),
-        target_url: item.link.target_url.clone(),
+        target_url: if item.link.text_content.is_some() {
+            "Shared text".to_string()
+        } else {
+            item.link.target_url.clone()
+        },
         label: item.link.label.clone(),
         total_clicks: item.total_clicks,
         created_at: millis_to_rfc3339(item.link.created_at),
@@ -376,7 +384,12 @@ pub async fn admin_list_with_created(
 ) -> Response {
     let (csrf_token, set_cookie) = ensure_csrf_token(&headers, &state);
     let q = params.q.clone().unwrap_or_default();
-    let created_slug = params.created.clone();
+    // HTML escaping does not make a URL safe: a leading slash would turn
+    // href="/{{ slug }}" into a protocol-relative external link.
+    let created_slug = params
+        .created
+        .as_deref()
+        .and_then(|slug| crate::domain::link::normalize_custom_slug(slug).ok());
     let status = StatusFilter::from_param(params.status.as_deref()).unwrap_or_default();
     let sort = LinkSort::from_param(params.sort.as_deref()).unwrap_or_default();
     let (page, per_page) = normalize_pagination(params.page, params.per_page);
@@ -414,6 +427,7 @@ pub async fn admin_list_with_created(
                 (start, (start + shown - 1).min(result.total))
             };
             let tpl = LinksTemplate {
+                draft: CreateForm::default(),
                 title: "Admin — Links".to_string(),
                 brand_host: brand_host(&state),
                 csrf_token,
@@ -462,7 +476,7 @@ fn render_with_cookie<T: Template>(tpl: T, set_cookie: Option<String>) -> Respon
 
 async fn render_list_with_error(
     state: &AppState,
-    headers: &HeaderMap,
+    draft: &CreateForm,
     csrf_token: String,
     set_cookie: Option<String>,
     query: String,
@@ -499,6 +513,7 @@ async fn render_list_with_error(
     })
     .unwrap_or_default();
     let tpl = LinksTemplate {
+        draft: draft.clone(),
         title: "Admin — Links".to_string(),
         brand_host: brand_host(state),
         csrf_token,
@@ -527,10 +542,6 @@ async fn render_list_with_error(
                     resp.headers_mut().append(header::SET_COOKIE, v);
                 }
             }
-            // Refresh cookie even on error so the form stays usable.
-            if resp.headers().get(header::SET_COOKIE).is_none() {
-                let _ = &headers;
-            }
             resp
         }
         Err(e) => html_error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -552,7 +563,7 @@ pub async fn admin_create(
         Err(e) => {
             return render_list_with_error(
                 &state,
-                &headers,
+                &form,
                 csrf_token,
                 set_cookie,
                 String::new(),
@@ -565,6 +576,7 @@ pub async fn admin_create(
 
     let input = CreateLinkInput {
         target_url: form.target_url.clone().unwrap_or_default(),
+        text_content: form.text_content.clone(),
         custom_slug: form.custom_slug.clone().filter(|s| !s.trim().is_empty()),
         label: form.label.clone().filter(|s| !s.trim().is_empty()),
         expires_at,
@@ -588,7 +600,7 @@ pub async fn admin_create(
         Err(e) => {
             render_list_with_error(
                 &state,
-                &headers,
+                &form,
                 csrf_token,
                 set_cookie,
                 String::new(),
@@ -619,6 +631,7 @@ pub async fn admin_edit_form(
                 short_url: state.short_url(&link.slug),
                 slug: link.slug.clone(),
                 target_url: link.target_url.clone(),
+                text_content: link.text_content.clone(),
                 label: link.label.clone().unwrap_or_default(),
                 expires_input: format_datetime_local(link.expires_at),
                 expires_display: link
@@ -660,6 +673,7 @@ pub async fn admin_update(
         Err(e) => {
             return render_edit_with_error(
                 &state,
+                &form,
                 &slug,
                 csrf_token,
                 set_cookie,
@@ -676,14 +690,16 @@ pub async fn admin_update(
 
     let input = UpdateLinkInput {
         target_url: target_opt,
+        text_content: form.text_content.clone(),
         label: Some(form.label.clone().filter(|s| !s.trim().is_empty())),
         expires_at,
     };
 
     // If target was empty string, surface a clear error.
-    if form.target_url.as_deref().unwrap_or("").is_empty() {
+    if form.text_content.is_none() && form.target_url.as_deref().unwrap_or("").is_empty() {
         return render_edit_with_error(
             &state,
+            &form,
             &slug,
             csrf_token,
             set_cookie,
@@ -711,6 +727,7 @@ pub async fn admin_update(
         Err(e) => {
             render_edit_with_error(
                 &state,
+                &form,
                 &slug,
                 csrf_token,
                 set_cookie,
@@ -724,6 +741,7 @@ pub async fn admin_update(
 
 async fn render_edit_with_error(
     state: &AppState,
+    draft: &UpdateForm,
     slug: &str,
     csrf_token: String,
     set_cookie: Option<String>,
@@ -741,9 +759,16 @@ async fn render_edit_with_error(
                 csrf_token,
                 short_url: state.short_url(&link.slug),
                 slug: link.slug.clone(),
-                target_url: link.target_url.clone(),
-                label: link.label.clone().unwrap_or_default(),
-                expires_input: format_datetime_local(link.expires_at),
+                target_url: draft
+                    .target_url
+                    .clone()
+                    .unwrap_or_else(|| link.target_url.clone()),
+                text_content: link
+                    .text_content
+                    .as_ref()
+                    .map(|text| draft.text_content.clone().unwrap_or_else(|| text.clone())),
+                label: draft.label.clone().unwrap_or_default(),
+                expires_input: draft.expires_at.clone().unwrap_or_default(),
                 expires_display: link
                     .expires_at
                     .map(millis_to_rfc3339)

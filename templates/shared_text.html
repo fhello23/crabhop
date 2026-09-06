@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="container shared-page">
+    <h1>{{ title }}</h1>
+    <p id="read-only-note" class="muted">Shared text · Read only. Select any part or copy everything.</p>
+    <div class="actions">
+      <button type="button" data-copy-target="shared-text" aria-describedby="copy-status">Copy text</button>
+      <span id="copy-status" role="status" aria-live="polite" class="muted"></span>
+    </div>
+    <label for="shared-text">Shared text</label>
+    <textarea id="shared-text" class="shared-text" readonly spellcheck="false" aria-describedby="read-only-note">
+{{ text_content }}</textarea>
+    <noscript><p>Select the text and use your device’s copy command to copy it.</p></noscript>
+  </main>
+</body>
+</html>

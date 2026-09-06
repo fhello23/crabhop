@@ -16,6 +16,9 @@ use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
 
+// Allows the worst-case JSON/form escaping overhead for 64 KiB of text.
+pub const MAX_REQUEST_BYTES: usize = 512 * 1024;
+
 pub fn app_router(state: AppState) -> Router {
     // Static routes first; catch-all slug route last so reserved paths
     // (/admin, /api, /health/*, /robots.txt, /static) always win.
@@ -49,8 +52,8 @@ pub fn app_router(state: AppState) -> Router {
             get(public::redirect_slug).head(public::redirect_slug),
         )
         .fallback(fallback_404)
-        // 16 KiB body cap per plan (applies to form + JSON mutations).
-        .layer(RequestBodyLimitLayer::new(16 * 1024))
+        // Bounded form + JSON bodies, including escaped shared text.
+        .layer(RequestBodyLimitLayer::new(MAX_REQUEST_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             Duration::from_secs(10),
@@ -63,15 +66,15 @@ pub fn app_router(state: AppState) -> Router {
             state.clone(),
             security::management_auth_mw,
         ))
-        // Request logging deliberately excludes Authorization/Cookie headers
-        // (TraceLayer default logs method/path/status/latency only).
+        // Log route patterns, never literal share slugs or query strings.
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(|req: &axum::http::Request<axum::body::Body>| {
                     tracing::info_span!(
                         "request",
                         method = %req.method(),
-                        path = %req.uri().path(),
+                        route = req.extensions().get::<axum::extract::MatchedPath>()
+                            .map(|path| path.as_str()).unwrap_or("unmatched"),
                     )
                 })
                 .on_response(

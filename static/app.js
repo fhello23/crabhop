@@ -1,4 +1,4 @@
-// Progressive enhancement: copy-to-clipboard for short URLs.
+// Progressive enhancement: copy short URLs and read-only shared text.
 // Supports both input-based buttons (data-copy-target="<input id>") and
 // direct-value buttons (data-copy-value="<text>").
 // No inline scripts are used so the admin CSP (script-src 'self') holds.
@@ -16,6 +16,8 @@ document.addEventListener("click", async (event) => {
   }
   if (text === null) return;
   const flash = () => {
+    const status = document.getElementById("copy-status");
+    if (status) status.textContent = "Text copied.";
     const original = btn.textContent;
     btn.textContent = "Copied!";
     setTimeout(() => { btn.textContent = original; }, 1500);
@@ -24,10 +26,17 @@ document.addEventListener("click", async (event) => {
     await navigator.clipboard.writeText(text);
     flash();
   } catch {
+    let copied = false;
     if (input) {
+      input.focus();
       input.select();
-      document.execCommand("copy");
+      try { copied = document.execCommand("copy"); } catch { /* manual copy remains available */ }
+    }
+    if (copied) {
       flash();
+    } else {
+      const status = document.getElementById("copy-status");
+      if (status) status.textContent = "Text selected. Use your device’s copy command to copy it.";
     }
   }
 });

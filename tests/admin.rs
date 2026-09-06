@@ -181,6 +181,7 @@ async fn admin_escapes_stored_values() {
         &app.state.db,
         &app.state.config.base_url,
         shortener::domain::link::CreateLinkInput {
+            text_content: None,
             target_url: "https://example.com/?q=1".to_string(),
             custom_slug: Some("escapetest".to_string()),
             label: Some("<script>alert('xss')</script>".to_string()),
@@ -214,7 +215,7 @@ async fn admin_escapes_stored_values() {
     let (_, headers, _) = response_body_string(res).await;
     assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
     assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
-    assert_eq!(headers.get("Referrer-Policy").unwrap(), "same-origin");
+    assert_eq!(headers.get("Referrer-Policy").unwrap(), "no-referrer");
     assert!(headers.contains_key("Content-Security-Policy"));
 
     // CSRF cookie attributes.
