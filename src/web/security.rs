@@ -235,6 +235,7 @@ pub async fn security_headers_mw(
     next: Next,
 ) -> Response {
     let path = req.uri().path().to_owned();
+    let is_admin = path == "/admin" || path.starts_with("/admin/");
     let mut res = next.run(req).await;
     let headers = res.headers_mut();
     // Never expose powered-by details; harden MIME sniffing & framing.
@@ -244,7 +245,15 @@ pub async fn security_headers_mw(
     if let Ok(v) = "DENY".parse() {
         headers.insert(header::X_FRAME_OPTIONS, v);
     }
-    if let Ok(v) = "no-referrer".parse() {
+    // Native HTML form POSTs under no-referrer send Origin: null and no
+    // Referer. Admin forms need same-origin provenance for the CSRF guard;
+    // public shares can continue suppressing referrers completely.
+    let referrer_policy = if is_admin {
+        "same-origin"
+    } else {
+        "no-referrer"
+    };
+    if let Ok(v) = referrer_policy.parse() {
         headers.insert(header::REFERRER_POLICY, v);
     }
     if is_management_path(&path) {
@@ -254,7 +263,7 @@ pub async fn security_headers_mw(
             headers.insert(header::CACHE_CONTROL, v);
         }
     }
-    if path.starts_with("/admin") {
+    if is_admin {
         if let Ok(v) = "default-src 'self'; style-src 'self' 'unsafe-inline'; \
              script-src 'self'; img-src 'self' data:; object-src 'none'; \
              base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
@@ -326,5 +335,12 @@ mod tests {
 
         let empty = HeaderMap::new();
         assert!(!verify_origin(&empty, "https://go.example.com"));
+
+        // An explicit null/foreign Origin must not be overridden by a
+        // matching Referer. Fix the emitting policy, not this boundary.
+        for origin in ["null", "https://evil.com"] {
+            h2.insert(header::ORIGIN, origin.parse().unwrap());
+            assert!(!verify_origin(&h2, "https://go.example.com"));
+        }
     }
 }

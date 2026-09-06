@@ -165,7 +165,11 @@ analytics. Text pages use `no-store`, `noindex`, and a restrictive CSP.
 - API mutations: require `Content-Type: application/json` + `X-Requested-With`
   header; no CORS headers are ever emitted.
 - Headers: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
-  `Referrer-Policy: no-referrer`, restrictive CSP on `/admin`.
+  `Referrer-Policy: same-origin` on admin routes and `no-referrer` elsewhere,
+  restrictive CSP on `/admin`. Admin pages must preserve same-origin
+  provenance: `no-referrer` makes native browser POSTs send `Origin: null`,
+  which the CSRF guard correctly rejects. Do not override this policy at a
+  fronting proxy.
   Every `/admin` and `/api` response carries `Cache-Control: no-store` so
   private link data is never retained in browser caches.
 - Production HTTPS responses carry
@@ -303,6 +307,7 @@ cargo audit            # honors .cargo/audit.toml (dated, scoped ignores only)
 docker build .
 compose startup + Caddy authentication smoke test (scripts/smoke-caddy-auth.sh),
 log-redaction smoke test (scripts/smoke-log-privacy.py),
+native browser admin form lifecycle (scripts/smoke-admin-browser.cjs),
 an end-to-end link lifecycle through the proxy, and a check that port 3000
 is not published
 ```

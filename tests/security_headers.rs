@@ -192,6 +192,42 @@ async fn api_responses_are_non_cacheable() {
 }
 
 #[tokio::test]
+async fn referrer_policy_preserves_admin_forms_and_protects_public_shares() {
+    let app = setup().await;
+    common::create_link(
+        &app.state,
+        Some("adminnotes"),
+        "https://example.com/notes",
+        None,
+    )
+    .await;
+    for (path, expected) in [
+        ("/admin", "same-origin"),
+        ("/admin/links/missing", "same-origin"),
+        ("/admin/missing", "same-origin"),
+        ("/api/v1/links", "no-referrer"),
+        ("/adminnotes", "no-referrer"),
+        ("/", "no-referrer"),
+    ] {
+        let request = with_proxy_token(axum::http::Request::builder().uri(path))
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let response = app.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(
+            response.headers()[header::REFERRER_POLICY],
+            expected,
+            "{path}"
+        );
+        if path == "/adminnotes" {
+            assert!(response.headers()[header::CONTENT_SECURITY_POLICY]
+                .to_str()
+                .unwrap()
+                .contains("form-action 'none'"));
+        }
+    }
+}
+
+#[tokio::test]
 async fn public_responses_keep_their_own_cache_behavior() {
     // The no-store rule is scoped to management paths: public behavior is
     // unchanged (redirects already set no-store themselves; landing has none).

@@ -111,6 +111,36 @@ async fn admin_create_and_edit_lifecycle() {
 }
 
 #[tokio::test]
+async fn admin_forms_accept_same_origin_referer_without_origin() {
+    let app = setup().await;
+    let (token, cookie) = get_admin_csrf(&app).await;
+    for body in [
+        "target_url=https%3A%2F%2Fexample.com%2Freferer",
+        "text_content=Notes",
+    ] {
+        let mut req = post_admin("/admin/links", body, &token, &cookie, None);
+        req.headers_mut()
+            .insert(header::REFERER, "http://localhost/admin".parse().unwrap());
+        let (status, _, body) =
+            response_body_string(app.router.clone().oneshot(req).await.unwrap()).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{body}");
+    }
+    let mut req = post_admin(
+        "/admin/links",
+        "text_content=Tampered",
+        "invalid-token",
+        &cookie,
+        None,
+    );
+    req.headers_mut()
+        .insert(header::REFERER, "http://localhost/admin".parse().unwrap());
+    assert_eq!(
+        app.router.oneshot(req).await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
 async fn admin_rejects_missing_or_invalid_csrf() {
     let app = setup().await;
     let (token, cookie) = get_admin_csrf(&app).await;
@@ -215,7 +245,7 @@ async fn admin_escapes_stored_values() {
     let (_, headers, _) = response_body_string(res).await;
     assert_eq!(headers.get("X-Content-Type-Options").unwrap(), "nosniff");
     assert_eq!(headers.get("X-Frame-Options").unwrap(), "DENY");
-    assert_eq!(headers.get("Referrer-Policy").unwrap(), "no-referrer");
+    assert_eq!(headers.get("Referrer-Policy").unwrap(), "same-origin");
     assert!(headers.contains_key("Content-Security-Policy"));
 
     // CSRF cookie attributes.

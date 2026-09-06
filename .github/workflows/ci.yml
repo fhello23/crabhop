@@ -130,6 +130,18 @@ jobs:
         run: |
           export SMOKE_CADDY_CONTAINER="$(docker compose ps -q caddy)"
           ADMIN_PASSWORD='ci-admin-pass' python3 scripts/smoke-log-privacy.py http://localhost:8080
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser smoke-test dependencies
+        run: |
+          npm install --prefix "$RUNNER_TEMP/crabhop-browser" --no-package-lock --no-save playwright@1.62.1
+          "$RUNNER_TEMP/crabhop-browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Native browser admin forms through Caddy
+        env:
+          ADMIN_PASSWORD: ci-admin-pass
+        run: |
+          NODE_PATH="$RUNNER_TEMP/crabhop-browser/node_modules" node scripts/smoke-admin-browser.cjs http://localhost:8080
       - name: Application port must not be published
         run: |
           set -eu
