@@ -33,7 +33,7 @@ uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting", "parsing"] }
 hmac = "0.12"
 sha2 = "0.10"
-base64 = "0.22"
+base64 = "0.23"
 subtle = "2"
 dotenvy = "0.15"
 http-body-util = "0.1"
