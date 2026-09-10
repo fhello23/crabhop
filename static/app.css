@@ -4,6 +4,7 @@ body { margin: 0; font: 16px/1.5 system-ui, -apple-system, sans-serif; color: va
 .container { max-width: 880px; margin: 0 auto; padding: 0 16px; }
 .topbar { border-bottom: 1px solid var(--line); margin-bottom: 24px; }
 .nav { display: flex; gap: 12px; align-items: baseline; padding: 12px 16px; }
+.nav-spacer { flex: 1; }
 .brand { font-weight: 700; color: var(--fg); text-decoration: none; }
 .muted { color: var(--muted); }
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 16px 0; }

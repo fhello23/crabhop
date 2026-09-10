@@ -83,6 +83,7 @@ GET   /robots.txt              Disallow: /
 GET   /health/live             no DB
 GET   /health/ready            SELECT 1 (+ migrations ran at startup)
 GET   /admin                   list + create (CSRF cookie issued)
+GET   /admin/logout            logout page (browser verifies Basic Auth logout)
 POST  /admin/links             create
 GET   /admin/links/{slug}      edit form
 POST  /admin/links/{slug}      update target/label/expiry
@@ -334,6 +335,7 @@ log-redaction smoke test (scripts/smoke-log-privacy.py),
 native browser admin form lifecycle (scripts/smoke-admin-browser.cjs),
 text previews and downloads (scripts/smoke-text-shares.cjs),
 local expiration, presets, DST, and filters (scripts/smoke-expiration.cjs),
+verified browser logout, failure handling, and retry (scripts/smoke-logout.cjs),
 an end-to-end link lifecycle through the proxy, and a check that port 3000
 is not published
 ```

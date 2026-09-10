@@ -12,12 +12,15 @@
     <nav class="container nav">
       <a class="brand" href="/admin">{{ brand_host }}</a>
       <span class="muted">links &amp; shared text</span>
+      <span class="nav-spacer"></span>
+      <a class="button secondary small" href="/admin/logout">Log out</a>
     </nav>
   </header>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
   <script src="/static/app.js" defer></script>
+  <script src="/static/logout.js" defer></script>
   <script src="/static/expiration.js" defer></script>
   <script src="/static/vendor/markdown-it.min.js" defer></script>
   <script src="/static/vendor/highlight.min.js" defer></script>

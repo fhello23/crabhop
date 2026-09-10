@@ -89,6 +89,13 @@ struct EditTemplate {
     chart_bars: Vec<ChartBar>,
 }
 
+#[derive(Template)]
+#[template(path = "logout.html")]
+struct LogoutTemplate {
+    title: String,
+    brand_host: String,
+}
+
 #[derive(Debug, Clone)]
 struct ChartBar {
     height_pct: u8,
@@ -845,6 +852,41 @@ async fn render_edit_with_error(
             }
         }
         Err(e) => html_error(e.status(), &e.public_message()),
+    }
+}
+
+/// Expire the CSRF cookie. This is hygiene only: admin authentication lives
+/// in the browser's cached Basic Auth credentials (checked by Caddy), which
+/// only the logout page's JavaScript + browser controls can drop.
+fn csrf_clear_cookie_value(secure: bool) -> String {
+    let mut s = String::from("csrf_token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+    if secure {
+        s.push_str("; Secure");
+    }
+    s
+}
+
+/// GET /admin/logout — explain Basic Auth logout and clear the CSRF cookie.
+/// Credential clearing itself happens client-side (see `static/logout.js`);
+/// this page is still behind the management gate so direct port access
+/// cannot probe it.
+pub async fn admin_logout(State(state): State<AppState>) -> Response {
+    let tpl = LogoutTemplate {
+        title: "Log out — Admin".to_string(),
+        brand_host: brand_host(&state),
+    };
+    match tpl.render() {
+        Ok(html) => {
+            let mut resp = (StatusCode::OK, Html(html)).into_response();
+            if let Ok(v) = csrf_clear_cookie_value(is_secure_base(&state)).parse() {
+                resp.headers_mut().append(header::SET_COOKIE, v);
+            }
+            resp
+        }
+        Err(e) => html_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("template error: {e}"),
+        ),
     }
 }
 

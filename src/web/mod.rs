@@ -29,6 +29,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/health/ready", get(public::health_ready))
         // Admin UI (browser forms; CSRF + Origin enforced in handlers).
         .route("/admin", get(admin::admin_list_with_created))
+        .route("/admin/logout", get(admin::admin_logout))
         .route("/admin/links", post(admin::admin_create))
         .route("/admin/links/{slug}", get(admin::admin_edit_form))
         .route("/admin/links/{slug}", post(admin::admin_update))
