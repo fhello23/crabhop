@@ -1,7 +1,12 @@
 {% extends "base.html" %}
 {% import "expiration.html" as expiration %}
 {% block content %}
-<h1>Links</h1>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Dashboard</p>
+    <h1>Links</h1>
+  </div>
+</div>
 
 {% if let Some(slug) = created_slug %}
 <div class="banner success" role="status">
@@ -22,8 +27,9 @@
 <div class="banner error" role="alert">{{ msg }}</div>
 {% endif %}
 
-<section class="card">
-  <h2>Create a link</h2>
+<div class="create-grid">
+<section class="card" aria-labelledby="create-link-heading">
+  <h2 id="create-link-heading">Create a link</h2>
   <form method="post" action="/admin/links">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>Destination URL (http/https)
@@ -42,9 +48,9 @@
   </form>
 </section>
 
-<section class="card">
+<section class="card" aria-labelledby="share-text-heading">
   <details {% if draft.text_content.is_some() %}open{% endif %}>
-    <summary class="create-text-heading">Share text</summary>
+    <summary class="create-text-heading" id="share-text-heading">Share text</summary>
     <p class="muted">Create a page anyone with the link can read and copy. Only you can edit it from the admin area.</p>
     <form method="post" action="/admin/links">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -68,9 +74,10 @@
     </form>
   </details>
 </section>
+</div>
 
-<section class="card">
-  <h2>Existing links</h2>
+<section class="card" aria-labelledby="existing-links-heading">
+  <h2 id="existing-links-heading">Existing links</h2>
   <form method="get" action="/admin" class="filter-row">
     <input type="search" name="q" value="{{ query }}" placeholder="Search slug, URL, label" aria-label="Search links">
     <select name="status" aria-label="Filter by status">
@@ -107,7 +114,7 @@
   <p class="muted">No links match these filters.</p>
   {% else %}
   <div class="table-wrap">
-  <table>
+  <table class="links-table">
     <thead>
       <tr><th>Slug</th><th>Destination / type</th><th>Clicks</th><th>Status</th><th>Updated</th><th>Actions</th></tr>
     </thead>

@@ -1,21 +1,29 @@
 {% extends "base.html" %}
 {% import "expiration.html" as expiration %}
 {% block content %}
-<p><a href="/admin">&larr; Back to links</a></p>
-<h1>Edit <code>/{{ slug }}</code></h1>
+<p class="back"><a href="/admin">&larr; Back to links</a></p>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Edit link</p>
+    <h1>Edit <code>/{{ slug }}</code></h1>
+  </div>
+  <p>{% if disabled %}<span class="pill off">disabled</span>{% else %}<span class="pill on">enabled</span>{% endif %}</p>
+</div>
 
-<p class="muted">Short URL:
-  <input id="short-url" type="text" readonly value="{{ short_url }}">
-  <button type="button" data-copy-target="short-url">Copy</button>
-</p>
-<p class="muted"><small>Created <time datetime="{{ created_at }}" data-local-time>{{ created_at }}</time> · Updated <time datetime="{{ updated_at }}" data-local-time>{{ updated_at }}</time> · Expires {% if expires_display == "never" %}never{% else %}<time datetime="{{ expires_display }}" data-local-time>{{ expires_display }}</time>{% endif %}</small></p>
+<section class="card" aria-label="Link details">
+  <div class="copy-row">
+    <input id="short-url" type="text" readonly value="{{ short_url }}" aria-label="Short URL">
+    <button type="button" class="secondary" data-copy-target="short-url">Copy</button>
+  </div>
+  <p class="muted"><small>Created <time datetime="{{ created_at }}" data-local-time>{{ created_at }}</time> · Updated <time datetime="{{ updated_at }}" data-local-time>{{ updated_at }}</time> · Expires {% if expires_display == "never" %}never{% else %}<time datetime="{{ expires_display }}" data-local-time>{{ expires_display }}</time>{% endif %}</small></p>
+</section>
 
 {% if let Some(msg) = error %}
 <div class="banner error" role="alert">{{ msg }}</div>
 {% endif %}
 
-<section class="card">
-  <h2>Content &amp; expiration</h2>
+<section class="card" aria-labelledby="content-heading">
+  <h2 id="content-heading">Content &amp; expiration</h2>
   <p class="muted"><small>Slugs are immutable. To rename, create a new link and disable this one.</small></p>
   <form method="post" action="/admin/links/{{ slug }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -40,8 +48,8 @@
   </form>
 </section>
 
-<section class="card">
-  <h2>Activity</h2>
+<section class="card" aria-labelledby="activity-heading">
+  <h2 id="activity-heading">Activity</h2>
   <p><strong>{{ activity_total }}</strong> total clicks · <strong>{{ activity_7d }}</strong> in the last 7 days · Last clicked: {% if activity_last == "Never" %}Never{% else %}<time datetime="{{ activity_last }}" data-local-time>{{ activity_last }}</time>{% endif %}</p>
   <div class="chart" aria-hidden="true">
     {% for b in chart_bars %}
@@ -63,8 +71,8 @@
   <p class="muted"><small>Successful public GET redirects and text views only, aggregated per UTC day. No visitor data is stored.</small></p>
 </section>
 
-<section class="card">
-  <h2>Status</h2>
+<section class="card" aria-labelledby="status-heading">
+  <h2 id="status-heading">Status</h2>
   {% if disabled %}
   <p><span class="pill off">disabled</span></p>
   <form method="post" action="/admin/links/{{ slug }}/enable">

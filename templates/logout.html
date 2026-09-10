@@ -1,24 +1,32 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Log out</h1>
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Session</p>
+    <h1>Log out</h1>
+  </div>
+</div>
 
-<p class="muted">Your browser remembers your sign-in. Log out below and wait
-for confirmation before leaving this device.</p>
+<section class="card" aria-labelledby="logout-heading">
+  <h2 id="logout-heading">Sign out of the admin area</h2>
+  <p class="muted">Your browser remembers your sign-in. Log out below and wait
+  for confirmation before leaving this device.</p>
 
-<p>
-  <button type="button" id="logout-button">Log out</button>
-  <a class="button secondary" id="logout-admin-link" href="/admin">Back to admin</a>
-</p>
-<p id="logout-status" role="status" aria-live="polite" class="muted"></p>
+  <p>
+    <button type="button" id="logout-button">Log out</button>
+    <a class="button secondary" id="logout-admin-link" href="/admin">Back to admin</a>
+  </p>
+  <p id="logout-status" role="status" aria-live="polite" class="muted"></p>
 
-<noscript>
-  <p>This logout check requires JavaScript. Enable it and try again, or quit
-  your browser completely.</p>
-</noscript>
+  <noscript>
+    <p>This logout check requires JavaScript. Enable it and try again, or quit
+    your browser completely.</p>
+  </noscript>
+</section>
 
-<section class="card">
-  <h2>If logout cannot be confirmed</h2>
-  <p>Try again when your connection is working, or quit your browser completely.
+<section class="card" aria-labelledby="logout-trouble-heading">
+  <h2 id="logout-trouble-heading">If logout cannot be confirmed</h2>
+  <p class="muted">Try again when your connection is working, or quit your browser completely.
   Closing this tab alone does not sign you out.</p>
 </section>
 {% endblock %}

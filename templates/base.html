@@ -3,15 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0e1116" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
   <title>{{ title }}</title>
   <link rel="stylesheet" href="/static/app.css">
   <link rel="stylesheet" href="/static/vendor/highlight-github.min.css">
+  <link rel="stylesheet" href="/static/vendor/highlight-github-dark.min.css" media="(prefers-color-scheme: dark)">
 </head>
 <body>
   <header class="topbar">
     <nav class="container nav">
-      <a class="brand" href="/admin">{{ brand_host }}</a>
-      <span class="muted">links &amp; shared text</span>
+      <a class="brand" href="/admin"><span class="brand-mark" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6.5 9.5a3.5 3.5 0 0 0 5 0l2-2a3.54 3.54 0 0 0-5-5l-1 1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M9.5 6.5a3.5 3.5 0 0 0-5 0l-2 2a3.54 3.54 0 0 0 5 5l1-1" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>{{ brand_host }}</a>
+      <span class="muted brand-sub">links &amp; shared text</span>
       <span class="nav-spacer"></span>
       <a class="button secondary small" href="/admin/logout">Log out</a>
     </nav>
